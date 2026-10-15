@@ -1,5 +1,10 @@
 # Changelog
 
+## Unreleased
+
+### Fixed
+- In Windows PowerShell and cmd, every command started by printing `]11;?[c`. The question asking the terminal for its background colour went out before escape sequences were turned on for the console, so it showed as text. They are now turned on first, and the question is not asked when the console cannot take it.
+
 ## 3.0.0
 
 A rewrite from scratch in Go: one binary for Windows, macOS and Linux, with a full-screen app and a command line.
