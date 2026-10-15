@@ -51,7 +51,7 @@ func (a *app) darkBackground() bool {
 	case "auto", "contrast":
 		in, okIn := a.in.(term.File)
 		out, okOut := a.stdout.(term.File)
-		if a.tty && a.ttyIn && okIn && okOut && !a.flags.json {
+		if a.tty && a.ttyIn && okIn && okOut && !a.flags.json && enableVT(out) {
 			return lipgloss.HasDarkBackground(in, out)
 		}
 	case "light":
