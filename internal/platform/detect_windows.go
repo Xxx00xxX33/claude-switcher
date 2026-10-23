@@ -5,6 +5,7 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
+	"strings"
 	"time"
 )
 
@@ -46,12 +47,12 @@ func windowsInstalls(local, roaming string) []Install {
 // any Claude_* package (another publisher or architecture).
 func msixInstalls(local string) []Install {
 	pkgs := []string{filepath.Join(local, "Packages", msixFamily)}
-	if !isDir(msixData(pkgs[0])) {
+	if !isDir(msixSelectedData(local, pkgs[0])) {
 		pkgs, _ = filepath.Glob(filepath.Join(local, "Packages", "Claude_*"))
 	}
 	var ins []Install
 	for _, pkg := range pkgs {
-		if data := msixData(pkg); isDir(data) {
+		if data := msixSelectedData(local, pkg); isDir(data) {
 			ins = append(ins, Install{
 				Kind:    MSIX,
 				DataDir: data,
@@ -61,6 +62,15 @@ func msixInstalls(local string) []Install {
 		}
 	}
 	return ins
+}
+
+// Keep the package identity and desktop lifecycle while following the new data root.
+func msixSelectedData(local, pkg string) string {
+	migrated := filepath.Join(local, "Claude-Data", strings.ToLower(filepath.Base(pkg)))
+	if exists(filepath.Join(migrated, "config.json")) || isDir(filepath.Join(migrated, "claude-code-sessions")) {
+		return migrated
+	}
+	return msixData(pkg)
 }
 
 func msixData(pkg string) string { return filepath.Join(pkg, "LocalCache", "Roaming", "Claude") }

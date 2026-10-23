@@ -71,3 +71,40 @@ func TestWindowsInstalls(t *testing.T) {
 		}
 	})
 }
+
+func TestMigratedMSIXData(t *testing.T) {
+	for _, tc := range []struct {
+		name          string
+		old, migrated bool
+	}{
+		{"both roots", true, true}, {"new root only", false, true}, {"empty new root", true, false},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			local, roaming := t.TempDir(), t.TempDir()
+			old := msixData(filepath.Join(local, "Packages", msixFamily))
+			migrated := filepath.Join(local, "Claude-Data", "claude_pzs8sxrjxfjjc")
+			if err := os.MkdirAll(migrated, 0755); err != nil {
+				t.Fatal(err)
+			}
+			if tc.old {
+				mkfile(t, filepath.Join(old, "config.json"), time.Now())
+			}
+			want := old
+			if tc.migrated {
+				mkfile(t, filepath.Join(migrated, "config.json"), time.Now().Add(-time.Hour))
+				want = migrated
+			}
+			got := windowsInstalls(local, roaming)
+			if len(got) != 1 {
+				t.Fatalf("got %+v", got)
+			}
+			in := got[0]
+			if in.DataDir != want || in.Kind != MSIX || in.AppID != msixFamily+"!Claude" {
+				t.Fatalf("wrong install: %+v", in)
+			}
+			if _, disabled := newDesktop(in).(nopDesktop); disabled {
+				t.Fatal("desktop lifecycle disabled")
+			}
+		})
+	}
+}
