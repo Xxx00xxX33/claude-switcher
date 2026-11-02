@@ -1,36 +1,157 @@
 package ui
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"charm.land/lipgloss/v2"
 	"github.com/charmbracelet/x/ansi"
+	"github.com/charmbracelet/x/exp/golden"
 	"github.com/nyxon-tech/claude-switcher/v3/internal/i18n"
+	"github.com/nyxon-tech/claude-switcher/v3/internal/ops"
 )
 
-// m on the account in use shows the sync plan's counts, then pulls the other account's chats in
-// and pushes the result out.
-func TestSyncBringsChats(t *testing.T) {
+// openPreview is m on the account in use: work has one chat list, so the preview opens at once.
+func openPreview(t *testing.T, a *app) *syncPreview {
+	t.Helper()
+	a.Update(press(a, "m")())
+	p := a.screens[0].(*accountsScreen).preview
+	if p == nil || a.dialog != nil {
+		t.Fatalf("m should open the sync preview; dialog %+v", a.dialog)
+	}
+	return p
+}
+
+// cardsIn counts the cards in an account's chat list.
+func cardsIn(t *testing.T, env *ops.Env, account string) int {
+	t.Helper()
+	cards, err := os.ReadDir(filepath.Join(env.Install.DataDir, "claude-code-sessions", account, orgID))
+	if err != nil {
+		t.Fatal(err)
+	}
+	return len(cards)
+}
+
+// m opens a preview grouped by action, one line per chat; a deselected line is left out of the
+// sync, the rest is written, and Activity lists the sync.
+func TestSyncPreviewExcludes(t *testing.T) {
 	env, _ := fixture(t)
 	a := newTestApp(t, env, 100, 30)
-	a.Update(press(a, "m")()) // work has one chat list, so the plan is worked out at once
-	if a.dialog == nil || !strings.Contains(a.dialog.body, i18n.T("ui.sync.counts", "pull", 2, "name", "work", "new", 3, "updated", 0, "archived", 0, "unarchived", 0, "deleted", 0, "conflict", 0)) {
-		t.Fatalf("m should show the plan's counts first; dialog %+v", a.dialog)
+	openPreview(t, a)
+	checkFrame(t, a)
+	wantIn(t, a, i18n.T("ui.sync.group.pull", "name", "work", "n", 2), i18n.T("ui.sync.group.create", "name", "work", "n", 3),
+		"Trip plan", "Budget sheet", "Release notes")
+	chatKeys(a, "space") // the first line: Trip plan, pulled into work
+	press(a, "enter")
+	if a.runner == nil {
+		t.Fatal("enter should start the sync")
 	}
-	press(a, "y")
 	a.Update(a.runner.try()())
-	if a.runner != nil || !strings.Contains(a.toast.text, "5") {
+	if a.runner != nil || !strings.Contains(a.toast.text, "4") {
 		t.Fatalf("the sync should finish with a toast; runner %v, toast %q", a.runner, a.toast.text)
 	}
-	cards, err := os.ReadDir(filepath.Join(env.Install.DataDir, "claude-code-sessions", workID, orgID))
-	if err != nil || len(cards) != 5 {
-		t.Errorf("work's list holds %d cards (%v), want its 3 plus personal's 2", len(cards), err)
+	if n := cardsIn(t, env, workID); n != 4 {
+		t.Errorf("work holds %d cards, want its 3 plus Budget sheet (Trip plan was left out)", n)
 	}
-	if cards, err := os.ReadDir(filepath.Join(env.Install.DataDir, "claude-code-sessions", personID, orgID)); err != nil || len(cards) != 5 {
-		t.Errorf("personal's list holds %d cards (%v), want 5", len(cards), err)
+	if n := cardsIn(t, env, personID); n != 5 {
+		t.Errorf("personal holds %d cards, want 5", n)
+	}
+	if js, err := env.History(); err != nil || len(js) != 1 || js[0].Action != ops.Sync {
+		t.Errorf("Activity should list the sync: %+v, %v", js, err)
+	}
+}
+
+// conflictFixture is fixture with Trip plan (personal) deleted in work before it was last used.
+func conflictFixture(t *testing.T) *ops.Env {
+	env, _ := fixture(t)
+	id := personID[:8] + "-0000-4000-8000-000000000000"
+	put(t, filepath.Join(env.Install.DataDir, "claude-code-sessions", workID, orgID, "deleted_"+id), fmt.Sprint(now.Add(-2*time.Hour).UnixMilli()))
+	return env
+}
+
+// A conflict must be settled before the sync runs: enter with one open jumps to it, d deletes
+// it anyway.
+func TestSyncConflictDeleteAnyway(t *testing.T) {
+	env := conflictFixture(t)
+	a := newTestApp(t, env, 100, 30)
+	openPreview(t, a)
+	wantIn(t, a, i18n.T("ui.sync.group.conflict", "name", "work", "n", 1), i18n.T("ui.sync.conflict.open"))
+	press(a, "enter")
+	if a.runner != nil || a.toast.text != i18n.T("ui.sync.conflict.unsettled", "n", 1) {
+		t.Fatalf("enter with an open conflict should say so, not run; toast %q", a.toast.text)
+	}
+	press(a, "d")
+	wantIn(t, a, i18n.T("ui.sync.conflict.delete"))
+	press(a, "enter")
+	if a.runner == nil {
+		t.Fatal("enter should run once every conflict is settled")
+	}
+	a.Update(a.runner.try()())
+	if n := cardsIn(t, env, personID); n != 4 {
+		t.Errorf("personal holds %d cards, want Budget sheet and work's 3 (Trip plan deleted)", n)
+	}
+	if n := cardsIn(t, env, workID); n != 5 {
+		t.Errorf("work holds %d cards, want its 3, Budget sheet and the marker", n)
+	}
+}
+
+// p keeps a conflicted chat and pulls it into the account synced from.
+func TestSyncConflictKeep(t *testing.T) {
+	env := conflictFixture(t)
+	a := newTestApp(t, env, 100, 30)
+	openPreview(t, a)
+	press(a, "enter", "p")
+	wantIn(t, a, i18n.T("ui.sync.conflict.keep", "name", "work"))
+	press(a, "enter")
+	a.Update(a.runner.try()())
+	if n := cardsIn(t, env, workID); n != 6 {
+		t.Errorf("work holds %d cards, want its 3, personal's 2 and the marker", n)
+	}
+	if n := cardsIn(t, env, personID); n != 5 {
+		t.Errorf("personal holds %d cards, want 5", n)
+	}
+}
+
+// A plan with nothing to do says so; esc leaves a preview without writing anything.
+func TestSyncNothingAndCancel(t *testing.T) {
+	env, _ := fixture(t)
+	a := newTestApp(t, env, 100, 30)
+	openPreview(t, a)
+	press(a, "esc")
+	if a.screens[0].(*accountsScreen).preview != nil || cardsIn(t, env, workID) != 3 {
+		t.Fatal("esc should close the preview and write nothing")
+	}
+	work, err := env.FindList("work")
+	if err != nil {
+		t.Fatal(err)
+	}
+	p, err := env.PlanSync(work)
+	if err == nil {
+		_, err = env.Apply(p)
+	}
+	if err != nil {
+		t.Fatal(err)
+	}
+	a.Update(press(a, "m")())
+	if a.dialog == nil || a.dialog.body != i18n.T("ui.sync.nothing") {
+		t.Fatalf("an empty plan should say there is nothing to sync; dialog %+v", a.dialog)
+	}
+}
+
+// The preview at the sizes the goldens keep: groups, lines and the conflict, scrolled to fit.
+func TestSyncPreviewFrames(t *testing.T) {
+	for _, size := range [][2]int{{60, 18}, {100, 30}} {
+		t.Run(fmt.Sprintf("en_%dx%d", size[0], size[1]), func(t *testing.T) {
+			a := newTestApp(t, conflictFixture(t), size[0], size[1])
+			openPreview(t, a)
+			chatKeys(a, "end")
+			checkFrame(t, a)
+			golden.RequireEqual(t, frameText(a))
+		})
 	}
 }
 

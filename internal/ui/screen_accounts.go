@@ -20,6 +20,9 @@ type accountsScreen struct {
 	follow string // a profile just saved, added or renamed: focus moves to it once it shows
 	top    int    // first card row shown when they do not all fit
 	geo    grid   // where the last View drew the cards, for clicks
+
+	preview *syncPreview // the sync plan waiting for a go, in place of the cards
+	pageH   int          // preview lines the last View showed, for pgup and pgdown
 }
 
 // grid is where the cards landed in the body.
@@ -63,6 +66,9 @@ func (s *accountsScreen) Keys(c *Ctx) []key.Binding {
 	if !c.Loaded {
 		return nil
 	}
+	if s.preview != nil {
+		return s.preview.keys()
+	}
 	if len(s.profiles(c)) == 0 {
 		return []key.Binding{bind("s", "ui.key.save")}
 	}
@@ -89,7 +95,7 @@ func (s *accountsScreen) Update(c *Ctx, msg tea.Msg) tea.Cmd {
 			s.focus, s.follow = i, ""
 		}
 	case syncPlanMsg:
-		if c.runner != nil || c.dialog != nil { // the user moved on while the plan was worked out
+		if c.runner != nil || c.dialog != nil || s.preview != nil { // the user moved on while the plan was worked out
 			return nil
 		}
 		if msg.err != nil {
@@ -97,10 +103,20 @@ func (s *accountsScreen) Update(c *Ctx, msg tea.Msg) tea.Cmd {
 		}
 		return s.confirmSync(c, msg.name, msg.plan)
 	case tea.KeyPressMsg:
+		if s.preview != nil {
+			cmd, done := s.preview.key(c, msg.String(), s.pageH)
+			if done {
+				s.preview = nil
+			}
+			return cmd
+		}
 		if c.Loaded {
 			return s.key(c, msg.String())
 		}
 	case tea.MouseClickMsg:
+		if s.preview != nil {
+			return nil
+		}
 		if i, ok := s.geo.hit(msg.X, msg.Y); ok {
 			if i == s.focus {
 				return s.activate(c)
@@ -108,6 +124,11 @@ func (s *accountsScreen) Update(c *Ctx, msg tea.Msg) tea.Cmd {
 			s.focus = i
 		}
 	case tea.MouseWheelMsg:
+		if s.preview != nil {
+			k := map[tea.MouseButton]string{tea.MouseWheelUp: "up", tea.MouseWheelDown: "down"}[msg.Button]
+			s.preview.key(c, k, s.pageH)
+			return nil
+		}
 		switch msg.Button {
 		case tea.MouseWheelUp:
 			return s.key(c, "up")
@@ -301,26 +322,13 @@ func planSync(c *Ctx, name string, to ops.List) tea.Cmd {
 	}
 }
 
+// confirmSync opens the preview of a plan, or says there is nothing to sync.
 func (s *accountsScreen) confirmSync(c *Ctx, name string, plan ops.Plan) tea.Cmd {
-	title := i18n.T("ui.sync.title", "name", name)
-	pull, add, upd, del := plan.Count(ops.Pull), plan.Count(ops.Create), plan.Count(ops.Update), plan.Count(ops.Delete)
-	arch, unarch := plan.Count(ops.Archive), plan.Count(ops.Unarchive)
-	if pull+add+upd+del+arch+unarch == 0 {
-		c.Alert(title, i18n.T("ui.sync.nothing"))
+	if len(plan.Steps) == 0 {
+		c.Alert(i18n.T("ui.sync.title", "name", name), i18n.T("ui.sync.nothing"))
 		return nil
 	}
-	counts := i18n.T("ui.sync.counts", "pull", pull, "name", name, "new", add, "updated", upd, "archived", arch, "unarchived", unarch, "deleted", del, "conflict", plan.Count(ops.Conflict))
-	env := c.Env
-	c.Confirm(title, counts+"\n"+i18n.T("ui.sync.body", "name", name), i18n.T("action.sync"), false, func() tea.Cmd {
-		return c.Change(change{
-			title: i18n.T("ui.sync.running", "name", name),
-			steps: []string{i18n.T("ui.step.synced", "name", name)},
-			run: func() (string, error) {
-				r, err := env.Apply(plan)
-				return r.Summary, err
-			},
-		})
-	})
+	s.preview = newSyncPreview(name, plan)
 	return nil
 }
 
@@ -350,6 +358,10 @@ func (s *accountsScreen) View(c *Ctx, width, height int) string {
 		return middle(l, st.Muted.Render(l.Fit(i18n.T("state.loading"), width)), width, height)
 	case c.Err != nil && len(c.Status.Profiles) == 0:
 		return middle(l, st.Fail.Render(l.Fit(c.Err.Error(), width)), width, height)
+	}
+	if s.preview != nil {
+		s.pageH = max(1, height-4)
+		return s.preview.view(c, width, height)
 	}
 	ps := s.profiles(c)
 	if len(ps) == 0 {
