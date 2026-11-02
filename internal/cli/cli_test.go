@@ -167,23 +167,30 @@ func TestCopyMoveUndo(t *testing.T) {
 	}
 }
 
-func TestMerge(t *testing.T) {
+func TestSync(t *testing.T) {
 	f := chatFixture(t)
-	workDir := f.listDir(work)
-	before := hash(workDir)
+	workDir, persDir := f.listDir(work), f.listDir(pers)
 	f.card(pers, "c1", s1, "Design review (older copy)", time.Now().Add(-100*time.Hour))
-	f.ok("merge", "--to", "work", "--yes")
+	workBefore, persBefore := hash(workDir), hash(persDir)
+	r := f.ok("sync", "--to", "work", "--yes")
+	if !strings.Contains(r.err, i18n.T("cli.plan.sync.counts", "pull", 1, "create", 1, "update", 1, "to", "work")) {
+		t.Errorf("sync prints its counts first:\n%s", r.err)
+	}
 	if !exist(filepath.Join(workDir, "local_c3.json")) || strings.Contains(f.read(filepath.Join(workDir, "local_c1.json")), "older copy") {
-		t.Fatal("merge copies what the target is missing and never an older copy")
+		t.Fatal("sync pulls what the target is missing and never an older copy")
+	}
+	if strings.Contains(f.read(filepath.Join(persDir, "local_c1.json")), "older copy") || !exist(filepath.Join(persDir, "local_c2.json")) {
+		t.Fatal("sync pushes the target's cards to the other lists")
 	}
 	f.ok("undo", "--yes")
-	if hash(workDir) != before {
-		t.Fatal("undo of a merge restores the target")
+	if hash(workDir) != workBefore || hash(persDir) != persBefore {
+		t.Fatal("undo of a sync restores every list")
 	}
-	f.want(f.run("merge"), exitUsage, "merge without --to")
+	f.want(f.run("sync"), exitUsage, "sync without --to")
+	f.want(f.run("merge", "--to", "work"), exitUsage, "merge is gone")
 
 	older := filepath.Join(f.listDir(pers), "local_c1.json")
-	r := f.ok("copy", "--from", "work", "--to", "personal", "c1", "--yes")
+	r = f.ok("copy", "--from", "work", "--to", "personal", "c1", "--yes")
 	if !strings.Contains(r.err, "0 new · 1 updated") || strings.Contains(f.read(older), "older copy") {
 		t.Fatalf("copy brings an older copy in the target up to date:\n%s", r.err)
 	}

@@ -20,7 +20,7 @@ import (
 const (
 	Copy   = "copy"
 	Move   = "move"
-	Merge  = "merge"
+	Sync   = "sync"
 	Rescue = "rescue"
 )
 
@@ -32,20 +32,22 @@ const (
 	Create    Action = "create"     // the target lacks the chat
 	Update    Action = "update"     // the target has an older copy; it is backed up and replaced
 	SkipNewer Action = "skip-newer" // the target's copy is as new or newer; it is left alone
+	Pull      Action = "pull"       // sync: list A lacks a chat another list has; it is copied into A
 )
 
 // Step is one chat of a plan.
 type Step struct {
 	Action Action
 	Chat   Chat   // the copy to write
-	Target string // its card file in the target list
+	List   List   // the list the step writes
+	Target string // its card file in List
 }
 
 // Plan is a change worked out before anything is written, for the caller to show and confirm.
 type Plan struct {
-	Kind  string // Copy, Move or Merge
-	From  List   // zero for Merge, which reads every other list
-	To    List
+	Kind  string // Copy, Move or Sync
+	From  List   // zero for Sync, which reads every list
+	To    List   // for Sync, list A: the list synced from
 	Steps []Step
 }
 
@@ -93,14 +95,15 @@ func (e *Env) PlanTransfer(from, to List, ids []string, move bool) (Plan, error)
 	}
 	for _, c := range picked {
 		target := filepath.Join(to.Dir, c.ID+".json")
-		p.Steps = append(p.Steps, Step{Action: decide(c.Last, target), Chat: c, Target: target})
+		p.Steps = append(p.Steps, Step{Action: decide(c.Last, target), Chat: c, List: to, Target: target})
 	}
 	return p, nil
 }
 
-// PlanMerge plans copying into a list every chat it is missing or holds an older copy of,
-// taking the newest copy found in any other list.
-func (e *Env) PlanMerge(to List) (Plan, error) {
+// PlanSync plans syncing every chat list with to (list A): the newest copy of every chat found
+// in any list is pulled into A, and A's resulting cards are pushed to every other list, across
+// every account and org. Each step names the list it writes; steps for A come first.
+func (e *Env) PlanSync(to List) (Plan, error) {
 	if to.Dir == "" {
 		return Plan{}, errf(NoList, "ref", "")
 	}
@@ -112,39 +115,45 @@ func (e *Env) PlanMerge(to List) (Plan, error) {
 	if err != nil {
 		return Plan{}, err
 	}
-	have := map[string]time.Time{}
-	targetChats, err := chatsOf(to, index)
-	if err != nil {
-		return Plan{}, err
+	type held struct {
+		list  List
+		chats map[string]Chat
 	}
-	for _, c := range targetChats {
-		have[c.ID] = c.Last
+	all := []held{{list: to}}
+	for _, l := range lists {
+		if !sameDir(l.Dir, to.Dir) {
+			all = append(all, held{list: l})
+		}
 	}
 	newest := map[string]Chat{}
-	for _, l := range lists {
-		if sameDir(l.Dir, to.Dir) {
-			continue
-		}
-		chats, err := chatsOf(l, index)
+	for i := range all {
+		chats, err := chatsOf(all[i].list, index)
 		if err != nil {
 			return Plan{}, err
 		}
+		all[i].chats = map[string]Chat{}
 		for _, c := range chats {
-			if last, ok := have[c.ID]; ok && !c.Last.After(last) {
-				continue
-			}
+			all[i].chats[c.ID] = c
 			if n, ok := newest[c.ID]; !ok || c.Last.After(n.Last) {
 				newest[c.ID] = c
 			}
 		}
 	}
-	p := Plan{Kind: Merge, To: to}
-	for _, c := range slices.SortedFunc(maps.Values(newest), newestFirst) {
-		action := Create
-		if _, ok := have[c.ID]; ok {
-			action = Update
+	p := Plan{Kind: Sync, To: to}
+	for _, h := range all {
+		for _, c := range slices.SortedFunc(maps.Values(newest), newestFirst) {
+			action := Create
+			if h.list.Dir == to.Dir {
+				action = Pull
+			}
+			if have, ok := h.chats[c.ID]; ok {
+				if !c.Last.After(have.Last) {
+					continue // already the newest copy
+				}
+				action = Update
+			}
+			p.Steps = append(p.Steps, Step{Action: action, Chat: c, List: h.list, Target: filepath.Join(h.list.Dir, c.ID+".json")})
 		}
-		p.Steps = append(p.Steps, Step{Action: action, Chat: c, Target: filepath.Join(to.Dir, c.ID+".json")})
 	}
 	return p, nil
 }
@@ -244,8 +253,8 @@ func writeCard(j *store.Journal, target string, data []byte, a Action, res *Resu
 func summary(p Plan) string {
 	n := len(p.Steps)
 	switch p.Kind {
-	case Merge:
-		return i18n.T("ops.done.merge", "n", n, "to", p.To.Label)
+	case Sync:
+		return i18n.T("ops.done.sync", "n", n, "to", p.To.Label)
 	case Move:
 		return i18n.T("ops.done.move", "n", n, "from", p.From.Label, "to", p.To.Label)
 	}

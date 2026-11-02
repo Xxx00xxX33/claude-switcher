@@ -41,7 +41,7 @@ func activityFixture(t *testing.T, env *ops.Env) {
 		created, removed int
 		undone           bool
 	}{
-		{ops.Merge, i18n.T("ops.done.merge", "n", 2, "to", "work"), 20 * time.Minute, 2, 0, false},
+		{"merge", "Copied 2 chats into work", 20 * time.Minute, 2, 0, false}, // recorded by an earlier version
 		{ops.Copy, i18n.T("ops.done.copy", "n", 1, "from", "personal", "to", "خانه"), 3 * time.Hour, 1, 0, true},
 		{ops.Move, i18n.T("ops.done.move", "n", 3, "from", "work", "to", "personal"), 50 * time.Hour, 3, 3, false},
 		{ops.Rescue, i18n.T("ops.done.rescue", "n", 2, "to", "work"), 12 * 24 * time.Hour, 2, 0, false},
@@ -240,7 +240,7 @@ func TestActivityStates(t *testing.T) {
 	activityFixture(t, env)
 	openActivity(a)
 	checkFrame(t, a)
-	wantIn(t, a, i18n.T("ops.done.merge", "n", 2, "to", "work"), i18n.T("insights.activity.undone"),
+	wantIn(t, a, "Copied 2 chats into work", i18n.T("insights.activity.undone"),
 		i18n.T("time.minutes_ago", "n", 20), i18n.Date(now.Add(-45*24*time.Hour).Local()))
 
 	a.Update(historyMsg{err: errors.New("journal is locked")})
@@ -290,7 +290,7 @@ func TestActivityUndo(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	plan, err := env.PlanMerge(work)
+	plan, err := env.PlanSync(work)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -307,7 +307,7 @@ func TestActivityUndo(t *testing.T) {
 		return len(entries)
 	}
 	if count() != 5 {
-		t.Fatalf("the merge left %d cards in work's list, want 5", count())
+		t.Fatalf("the sync left %d cards in work's list, want 5", count())
 	}
 	desk.running = true
 

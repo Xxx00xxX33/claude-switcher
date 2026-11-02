@@ -23,9 +23,9 @@ func (a *app) chatCommands() []*cobra.Command {
 	chats.Flags().IntVar(&limit, "limit", 0, a.txt(i18n.T("cli.flag.limit")))
 
 	var to string
-	merge := a.forceQuitFlag(a.command("merge --to <list>", "merge", "chats", nargs(0, 0), func(cmd *cobra.Command, _ []string) error {
+	sync := a.forceQuitFlag(a.command("sync --to <list>", "sync", "chats", nargs(0, 0), func(cmd *cobra.Command, _ []string) error {
 		if to == "" {
-			return usageError(errText("cli.err.merge"), cmd)
+			return usageError(errText("cli.err.sync"), cmd)
 		}
 		env, err := a.open()
 		if err != nil {
@@ -35,15 +35,15 @@ func (a *app) chatCommands() []*cobra.Command {
 		if err != nil {
 			return err
 		}
-		plan, err := env.PlanMerge(dst)
+		plan, err := env.PlanSync(dst)
 		if err != nil {
 			return err
 		}
 		return a.apply(cmd.Context(), env, plan)
 	}))
-	merge.Flags().StringVar(&to, "to", "", a.txt(i18n.T("cli.flag.to")))
+	sync.Flags().StringVar(&to, "to", "", a.txt(i18n.T("cli.flag.to")))
 
-	return []*cobra.Command{chats, a.transfer(false), a.transfer(true), merge, a.rescueCommand(), a.exportCommand(),
+	return []*cobra.Command{chats, a.transfer(false), a.transfer(true), sync, a.rescueCommand(), a.exportCommand(),
 		a.forceQuitFlag(a.command("undo", "undo", "chats", nargs(0, 0), a.undo)), a.historyCommand()}
 }
 
@@ -228,10 +228,14 @@ func (a *app) pointer() string { return a.st.accent.Render("›") }
 // apply shows a plan, asks, and carries it out once Desktop is closed.
 func (a *app) apply(ctx context.Context, env *ops.Env, p ops.Plan) error {
 	a.say(a.err, a.pointer(), a.st.plain, i18n.T("cli.plan."+p.Kind, "n", len(p.Steps), "from", p.From.Label, "to", p.To.Label))
-	a.note(a.err, i18n.T("cli.plan.counts", "create", p.Count(ops.Create), "update", p.Count(ops.Update), "skip", p.Count(ops.SkipNewer)))
+	if p.Kind == ops.Sync {
+		a.note(a.err, i18n.T("cli.plan.sync.counts", "pull", p.Count(ops.Pull), "create", p.Count(ops.Create), "update", p.Count(ops.Update), "to", p.To.Label))
+	} else {
+		a.note(a.err, i18n.T("cli.plan.counts", "create", p.Count(ops.Create), "update", p.Count(ops.Update), "skip", p.Count(ops.SkipNewer)))
+	}
 	// A move still removes the source cards when the target already has newer copies.
-	if p.Count(ops.Create)+p.Count(ops.Update) == 0 && (p.Kind != ops.Move || len(p.Steps) == 0) {
-		return a.changed(p.Kind, p.From.Label, p.To.Label, ops.Result{Summary: i18n.T("cli.plan.nothing", "to", p.To.Label), Skipped: len(p.Steps)}, false)
+	if p.Count(ops.Create)+p.Count(ops.Update)+p.Count(ops.Pull) == 0 && (p.Kind != ops.Move || len(p.Steps) == 0) {
+		return a.changed(p.Kind, p.From.Label, p.To.Label, ops.Result{Summary: nothing(p), Skipped: len(p.Steps)}, false)
 	}
 	if err := a.confirm(ctx, i18n.T("cli.confirm.proceed")); err != nil {
 		return err
@@ -245,6 +249,13 @@ func (a *app) apply(ctx context.Context, env *ops.Env, p ops.Plan) error {
 		return err
 	}
 	return a.changed(p.Kind, p.From.Label, p.To.Label, res, true)
+}
+
+func nothing(p ops.Plan) string {
+	if p.Kind == ops.Sync {
+		return i18n.T("cli.plan.sync.nothing")
+	}
+	return i18n.T("cli.plan.nothing", "to", p.To.Label)
 }
 
 type changeJSON struct {

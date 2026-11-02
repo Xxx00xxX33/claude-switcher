@@ -38,7 +38,7 @@ const (
 	minCardW = 26
 )
 
-type mergePlanMsg struct {
+type syncPlanMsg struct {
 	name string
 	plan ops.Plan
 	err  error
@@ -73,7 +73,7 @@ func (s *accountsScreen) Keys(c *Ctx) []key.Binding {
 		bind("s", "ui.key.save"),
 		bind("r", "ui.key.rename"),
 		bind("d", "ui.key.remove"),
-		bind("m", "ui.key.merge"),
+		bind("m", "ui.key.sync"),
 	}
 }
 
@@ -88,14 +88,14 @@ func (s *accountsScreen) Update(c *Ctx, msg tea.Msg) tea.Cmd {
 		if i := slices.IndexFunc(ps, func(p ops.Profile) bool { return strings.EqualFold(p.Name, s.follow) }); i >= 0 {
 			s.focus, s.follow = i, ""
 		}
-	case mergePlanMsg:
+	case syncPlanMsg:
 		if c.runner != nil || c.dialog != nil { // the user moved on while the plan was worked out
 			return nil
 		}
 		if msg.err != nil {
 			return c.Toast(toastFail, msg.err.Error())
 		}
-		return s.confirmMerge(c, msg.name, msg.plan)
+		return s.confirmSync(c, msg.name, msg.plan)
 	case tea.KeyPressMsg:
 		if c.Loaded {
 			return s.key(c, msg.String())
@@ -156,7 +156,7 @@ func (s *accountsScreen) key(c *Ctx, k string) tea.Cmd {
 	case "d":
 		return s.remove(c, p)
 	case "m":
-		return s.merge(c, p)
+		return s.sync(c, p)
 	}
 	return nil
 }
@@ -267,9 +267,9 @@ func (s *accountsScreen) remove(c *Ctx, p ops.Profile) tea.Cmd {
 	return nil
 }
 
-// merge brings every chat into the profile's chat list, asking which one when its account has
+// sync syncs every chat list with the profile's chat list, asking which one when its account has
 // several (one per organization).
-func (s *accountsScreen) merge(c *Ctx, p ops.Profile) tea.Cmd {
+func (s *accountsScreen) sync(c *Ctx, p ops.Profile) tea.Cmd {
 	var lists []ops.List
 	for _, l := range c.Status.Lists {
 		if p.Account != "" && l.Account == p.Account {
@@ -278,42 +278,42 @@ func (s *accountsScreen) merge(c *Ctx, p ops.Profile) tea.Cmd {
 	}
 	switch len(lists) {
 	case 0:
-		c.Alert(i18n.T("ui.merge.title", "name", p.Name), i18n.T("ui.merge.no_list", "name", p.Name))
+		c.Alert(i18n.T("ui.sync.title", "name", p.Name), i18n.T("ui.sync.no_list", "name", p.Name))
 		return nil
 	case 1:
-		return planMerge(c, p.Name, lists[0])
+		return planSync(c, p.Name, lists[0])
 	}
 	labels := make([]string, len(lists))
 	for i, l := range lists {
 		labels[i] = l.Label
 	}
-	c.Choose(i18n.T("ui.merge.pick", "name", p.Name), "", labels, func(i int) tea.Cmd {
-		return planMerge(c, p.Name, lists[i])
+	c.Choose(i18n.T("ui.sync.pick", "name", p.Name), "", labels, func(i int) tea.Cmd {
+		return planSync(c, p.Name, lists[i])
 	})
 	return nil
 }
 
-func planMerge(c *Ctx, name string, to ops.List) tea.Cmd {
+func planSync(c *Ctx, name string, to ops.List) tea.Cmd {
 	env := c.Env
 	return func() tea.Msg {
-		plan, err := env.PlanMerge(to)
-		return mergePlanMsg{name, plan, err}
+		plan, err := env.PlanSync(to)
+		return syncPlanMsg{name, plan, err}
 	}
 }
 
-func (s *accountsScreen) confirmMerge(c *Ctx, name string, plan ops.Plan) tea.Cmd {
-	title := i18n.T("ui.merge.title", "name", name)
-	add, upd := plan.Count(ops.Create), plan.Count(ops.Update)
-	if add+upd == 0 {
-		c.Alert(title, i18n.T("ui.merge.nothing", "name", name))
+func (s *accountsScreen) confirmSync(c *Ctx, name string, plan ops.Plan) tea.Cmd {
+	title := i18n.T("ui.sync.title", "name", name)
+	pull, add, upd := plan.Count(ops.Pull), plan.Count(ops.Create), plan.Count(ops.Update)
+	if pull+add+upd == 0 {
+		c.Alert(title, i18n.T("ui.sync.nothing"))
 		return nil
 	}
-	counts := i18n.T("ui.merge.counts", "new", add, "updated", upd, "newer", plan.Count(ops.SkipNewer))
+	counts := i18n.T("ui.sync.counts", "pull", pull, "name", name, "new", add, "updated", upd)
 	env := c.Env
-	c.Confirm(title, counts+"\n"+i18n.T("ui.merge.body"), i18n.T("action.merge"), false, func() tea.Cmd {
+	c.Confirm(title, counts+"\n"+i18n.T("ui.sync.body", "name", name), i18n.T("action.sync"), false, func() tea.Cmd {
 		return c.Change(change{
-			title: i18n.T("ui.merge.running", "name", name),
-			steps: []string{i18n.T("ui.step.merged", "name", name)},
+			title: i18n.T("ui.sync.running", "name", name),
+			steps: []string{i18n.T("ui.step.synced", "name", name)},
 			run: func() (string, error) {
 				r, err := env.Apply(plan)
 				return r.Summary, err

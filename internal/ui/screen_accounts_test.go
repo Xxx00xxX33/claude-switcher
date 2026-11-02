@@ -11,27 +11,31 @@ import (
 	"github.com/nyxon-tech/claude-switcher/v3/internal/i18n"
 )
 
-// m on the account in use shows the plan's counts, then copies the other account's chats in.
-func TestMergeBringsChats(t *testing.T) {
+// m on the account in use shows the sync plan's counts, then pulls the other account's chats in
+// and pushes the result out.
+func TestSyncBringsChats(t *testing.T) {
 	env, _ := fixture(t)
 	a := newTestApp(t, env, 100, 30)
 	a.Update(press(a, "m")()) // work has one chat list, so the plan is worked out at once
-	if a.dialog == nil || !strings.Contains(a.dialog.body, i18n.T("ui.merge.counts", "new", 2, "updated", 0, "newer", 0)) {
+	if a.dialog == nil || !strings.Contains(a.dialog.body, i18n.T("ui.sync.counts", "pull", 2, "name", "work", "new", 3, "updated", 0)) {
 		t.Fatalf("m should show the plan's counts first; dialog %+v", a.dialog)
 	}
 	press(a, "y")
 	a.Update(a.runner.try()())
-	if a.runner != nil || !strings.Contains(a.toast.text, "2") {
-		t.Fatalf("the merge should finish with a toast; runner %v, toast %q", a.runner, a.toast.text)
+	if a.runner != nil || !strings.Contains(a.toast.text, "5") {
+		t.Fatalf("the sync should finish with a toast; runner %v, toast %q", a.runner, a.toast.text)
 	}
 	cards, err := os.ReadDir(filepath.Join(env.Install.DataDir, "claude-code-sessions", workID, orgID))
 	if err != nil || len(cards) != 5 {
 		t.Errorf("work's list holds %d cards (%v), want its 3 plus personal's 2", len(cards), err)
 	}
+	if cards, err := os.ReadDir(filepath.Join(env.Install.DataDir, "claude-code-sessions", personID, orgID)); err != nil || len(cards) != 5 {
+		t.Errorf("personal's list holds %d cards (%v), want 5", len(cards), err)
+	}
 }
 
 // A plan that arrives after the user started something else is dropped, never opened over it.
-func TestLateMergePlanIsDropped(t *testing.T) {
+func TestLateSyncPlanIsDropped(t *testing.T) {
 	env, _ := fixture(t)
 	a := newTestApp(t, env, 100, 30)
 	plan := press(a, "m")
