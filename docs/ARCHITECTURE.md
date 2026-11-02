@@ -48,7 +48,11 @@ Never touched: `Local State` (holds the cookie encryption key), `claude_desktop_
    own are kept byte for byte. Files are written compact, UTF-8 without a BOM, via a temp file and
    rename.
 3. **Newest wins.** When two accounts hold the same chat, the card with the larger
-   `lastActivityAt` is the current one. Copy and merge never replace a newer card with an older one.
+   `lastActivityAt` is the current one. Copy, move and sync never replace a newer card with an
+   older one; a sync also writes a card just as new when only its archived state differs from
+   the list synced from. Sync deletes a chat's cards from every other list when the list synced
+   from has a `deleted_` marker for one of its transcripts (unless a copy was used after the
+   marker), backing each card up in the journal first.
 4. **A chat is several transcripts.** A card's `cliSessionId` is the current part and
    `priorCliSessionIds` lists older parts. Rescue never offers an older part, a tombstoned chat, or
    a chat another card already titles in the same project.
