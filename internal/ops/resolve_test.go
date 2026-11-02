@@ -23,7 +23,7 @@ func TestResolvedConflictDeletesEverywhere(t *testing.T) {
 	before := f.hash(sessions)
 	p, err := f.PlanSync(f.list("work"))
 	must(t, err)
-	p, err = f.Resolve(p, map[string]bool{"local_c3": false})
+	p, err = f.Resolve(p, map[string]Choice{"local_c3": DeleteAnyway})
 	must(t, err)
 	if p.Count(Conflict) != 0 || p.Count(Delete) != 2 {
 		t.Fatalf("the conflict should become two deletions: %+v", p.Steps)
@@ -48,7 +48,7 @@ func TestResolvedConflictKeepsAndPulls(t *testing.T) {
 	f, now := conflictFixture(t)
 	p, err := f.PlanSync(f.list("work"))
 	must(t, err)
-	p, err = f.Resolve(p, map[string]bool{"local_c3": true})
+	p, err = f.Resolve(p, map[string]Choice{"local_c3": KeepAndPull})
 	must(t, err)
 	if p.Count(Conflict) != 0 || p.Count(Pull) != 1 || p.Count(Delete) != 0 {
 		t.Fatalf("the conflict should become a pull into A: %+v", p.Steps)

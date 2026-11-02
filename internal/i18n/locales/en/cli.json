@@ -128,6 +128,8 @@
 	"cli.sync.group.archive": "Archive ({n})",
 	"cli.sync.group.unarchive": "Unarchive ({n})",
 	"cli.sync.group.conflict": "Conflict: deleted in {to} but used since; left alone ({n})",
+	"cli.sync.also.archive": "also archived",
+	"cli.sync.also.unarchive": "also unarchived",
 	"cli.sync.conflicts.one": "{n} conflict left alone; decide it in the app's sync preview",
 	"cli.sync.conflicts.other": "{n} conflicts left alone; decide them in the app's sync preview",
 	"cli.plan.sync.nothing": "Nothing to do: every chat list already has the newest copy of every chat.",

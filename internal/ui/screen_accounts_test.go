@@ -65,6 +65,50 @@ func TestSyncPreviewExcludes(t *testing.T) {
 	}
 }
 
+// threeLists is fixture with client's chat list too: Client brief, and an older, archived copy
+// of work's Fix the login redirect.
+func threeLists(t *testing.T) *ops.Env {
+	env, _ := fixture(t)
+	dir := filepath.Join(env.Install.DataDir, "claude-code-sessions", clientID, orgID)
+	brief := clientID[:8] + "-0000-4000-8000-000000000000"
+	put(t, filepath.Join(dir, "local_"+brief+".json"), fmt.Sprintf(`{"sessionId":"local_%s","cliSessionId":"%s","cwd":"/work/proj","title":"Client brief","lastActivityAt":%d}`,
+		brief, brief, now.Add(-5*time.Hour).UnixMilli()))
+	fix := workID[:8] + "-0000-4000-8000-000000000000"
+	put(t, filepath.Join(dir, "local_"+fix+".json"), fmt.Sprintf(`{"sessionId":"local_%s","cliSessionId":"%s","cwd":"/work/proj","title":"Fix the login redirect","lastActivityAt":%d,"isArchived":true}`,
+		fix, fix, now.Add(-9*time.Hour).UnixMilli()))
+	return env
+}
+
+// The preview has a line per chat in each group, its headings count chats, and an update that
+// also changes the archived state says so. Leaving a chat out leaves it out of every list.
+func TestSyncPreviewExcludesWholeChat(t *testing.T) {
+	env := threeLists(t)
+	a := newTestApp(t, env, 120, 40)
+	openPreview(t, a)
+	wantIn(t, a, i18n.T("ui.sync.group.pull", "name", "work", "n", 3), i18n.T("ui.sync.group.create", "name", "work", "n", 6),
+		i18n.T("ui.sync.group.update", "name", "work", "n", 1), i18n.T("ui.sync.also.unarchive"), "client, personal",
+		i18n.T("ui.sync.kept", "n", 6, "total", 6))
+	chatKeys(a, "space") // the first line: Trip plan, pulled into work, then pushed to client
+	wantIn(t, a, i18n.T("ui.sync.kept", "n", 5, "total", 6))
+	press(a, "enter")
+	if a.runner == nil {
+		t.Fatal("enter should start the sync")
+	}
+	a.Update(a.runner.try()())
+	for _, want := range []struct {
+		account string
+		n       int
+	}{{workID, 5}, {personID, 6}, {clientID, 5}} {
+		if n := cardsIn(t, env, want.account); n != want.n {
+			t.Errorf("%s holds %d cards, want %d (Trip plan left out everywhere)", want.account, n, want.n)
+		}
+	}
+	trip := filepath.Join(env.Install.DataDir, "claude-code-sessions", clientID, orgID, "local_"+personID[:8]+"-0000-4000-8000-000000000000.json")
+	if _, err := os.Stat(trip); err == nil {
+		t.Error("Trip plan was pushed to client although it was left out")
+	}
+}
+
 // conflictFixture is fixture with Trip plan (personal) deleted in work before it was last used.
 func conflictFixture(t *testing.T) *ops.Env {
 	env, _ := fixture(t)
@@ -73,8 +117,8 @@ func conflictFixture(t *testing.T) *ops.Env {
 	return env
 }
 
-// A conflict must be settled before the sync runs: enter with one open jumps to it, d deletes
-// it anyway.
+// A conflict must be settled before the sync runs: enter with one open jumps to it, space does
+// not leave it out, d deletes it anyway.
 func TestSyncConflictDeleteAnyway(t *testing.T) {
 	env := conflictFixture(t)
 	a := newTestApp(t, env, 100, 30)
@@ -83,6 +127,12 @@ func TestSyncConflictDeleteAnyway(t *testing.T) {
 	press(a, "enter")
 	if a.runner != nil || a.toast.text != i18n.T("ui.sync.conflict.unsettled", "n", 1) {
 		t.Fatalf("enter with an open conflict should say so, not run; toast %q", a.toast.text)
+	}
+	chatKeys(a, "space") // a conflict is never just left out
+	a.toast.text = ""
+	press(a, "enter")
+	if a.runner != nil || a.toast.text != i18n.T("ui.sync.conflict.unsettled", "n", 1) {
+		t.Fatalf("space should not settle a conflict; toast %q", a.toast.text)
 	}
 	press(a, "d")
 	wantIn(t, a, i18n.T("ui.sync.conflict.delete"))

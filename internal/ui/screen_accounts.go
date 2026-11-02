@@ -84,6 +84,16 @@ func (s *accountsScreen) Keys(c *Ctx) []key.Binding {
 }
 
 func (s *accountsScreen) Update(c *Ctx, msg tea.Msg) tea.Cmd {
+	switch msg.(type) {
+	case tea.KeyPressMsg, tea.MouseClickMsg, tea.MouseWheelMsg:
+		if s.preview != nil { // the preview takes every key, click and wheel turn
+			cmd, done := s.preview.update(c, msg, s.pageH)
+			if done {
+				s.preview = nil
+			}
+			return cmd
+		}
+	}
 	switch msg := msg.(type) {
 	case statusMsg:
 		ps := s.profiles(c)
@@ -103,20 +113,10 @@ func (s *accountsScreen) Update(c *Ctx, msg tea.Msg) tea.Cmd {
 		}
 		return s.confirmSync(c, msg.name, msg.plan)
 	case tea.KeyPressMsg:
-		if s.preview != nil {
-			cmd, done := s.preview.key(c, msg.String(), s.pageH)
-			if done {
-				s.preview = nil
-			}
-			return cmd
-		}
 		if c.Loaded {
 			return s.key(c, msg.String())
 		}
 	case tea.MouseClickMsg:
-		if s.preview != nil {
-			return nil
-		}
 		if i, ok := s.geo.hit(msg.X, msg.Y); ok {
 			if i == s.focus {
 				return s.activate(c)
@@ -124,11 +124,6 @@ func (s *accountsScreen) Update(c *Ctx, msg tea.Msg) tea.Cmd {
 			s.focus = i
 		}
 	case tea.MouseWheelMsg:
-		if s.preview != nil {
-			k := map[tea.MouseButton]string{tea.MouseWheelUp: "up", tea.MouseWheelDown: "down"}[msg.Button]
-			s.preview.key(c, k, s.pageH)
-			return nil
-		}
 		switch msg.Button {
 		case tea.MouseWheelUp:
 			return s.key(c, "up")

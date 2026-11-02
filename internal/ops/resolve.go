@@ -1,69 +1,47 @@
 package ops
 
-import "path/filepath"
+// Choice is what the user decided for a sync conflict.
+type Choice int
 
-// Resolve settles a sync plan's conflicts by chat id: keep pulls the newest copy into A and out
-// to every list, as if A had never deleted it; otherwise every copy is deleted anyway. Conflicts
-// not named stay as they are, which Apply leaves alone.
-func (e *Env) Resolve(p Plan, keep map[string]bool) (Plan, error) {
-	if p.Count(Conflict) == 0 || len(keep) == 0 {
+const (
+	Undecided    Choice = iota // left alone, which Apply does
+	DeleteAnyway               // every copy is deleted, as A deleted it
+	KeepAndPull                // the newest copy is pulled into A and out to every list
+)
+
+// Resolve settles a sync plan's conflicts by chat id: KeepAndPull pulls the newest copy into A
+// and out to every list, as if A had never deleted it; DeleteAnyway deletes every copy anyway.
+// Conflicts left Undecided stay as they are, which Apply leaves alone.
+func (e *Env) Resolve(p Plan, choices map[string]Choice) (Plan, error) {
+	if p.Count(Conflict) == 0 || len(choices) == 0 {
 		return p, nil
 	}
-	index, err := e.Index(e.Projects)
+	all, err := e.holdings(p.To)
 	if err != nil {
 		return Plan{}, err
-	}
-	lists, err := e.Lists()
-	if err != nil {
-		return Plan{}, err
-	}
-	held := map[string]map[string]Chat{} // list dir, then chat id
-	for _, l := range lists {
-		chats, err := chatsOf(l, index)
-		if err != nil {
-			return Plan{}, err
-		}
-		held[l.Dir] = map[string]Chat{}
-		for _, c := range chats {
-			held[l.Dir][c.ID] = c
-		}
 	}
 	out := p
 	out.Steps = nil
 	for _, s := range p.Steps {
-		k, named := keep[s.Chat.ID]
-		if s.Action != Conflict || !named {
+		if s.Action != Conflict {
 			out.Steps = append(out.Steps, s)
 			continue
 		}
-		if !k {
-			for _, l := range lists {
-				if have, ok := held[l.Dir][s.Chat.ID]; ok {
-					out.Steps = append(out.Steps, Step{Action: Delete, Chat: have, List: l, Target: have.Path})
+		switch choices[s.Chat.ID] {
+		case DeleteAnyway:
+			out.Steps = append(out.Steps, deletions(all, s.Chat.ID)...)
+		case KeepAndPull:
+			for i, h := range all {
+				missing := Create
+				if i == 0 {
+					missing = Pull
+				}
+				if st, ok := push(s.Chat, s.Chat.Archived, h, missing); ok {
+					out.Steps = append(out.Steps, st)
 				}
 			}
-			continue
-		}
-		c := s.Chat
-		out.Steps = append(out.Steps, Step{Action: Pull, Chat: c, List: p.To, Target: filepath.Join(p.To.Dir, c.ID+".json"), Archived: c.Archived})
-		for _, l := range lists {
-			if sameDir(l.Dir, p.To.Dir) {
-				continue
-			}
-			action := Create
-			if have, ok := held[l.Dir][c.ID]; ok {
-				switch {
-				case have.Archived != c.Archived && c.Archived:
-					action = Archive
-				case have.Archived != c.Archived:
-					action = Unarchive
-				case !c.Last.After(have.Last):
-					continue
-				default:
-					action = Update
-				}
-			}
-			out.Steps = append(out.Steps, Step{Action: action, Chat: c, List: l, Target: filepath.Join(l.Dir, c.ID+".json"), Archived: c.Archived})
+		default:
+			out.Steps = append(out.Steps, s)
 		}
 	}
 	return out, nil

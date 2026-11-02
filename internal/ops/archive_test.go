@@ -33,8 +33,8 @@ func TestSyncUnarchivesWhatAUnarchived(t *testing.T) {
 	f.card(third, "c9", s3, "Trip", now-1000, `,"isArchived":true`)
 	p, err := f.PlanSync(f.list("work"))
 	must(t, err)
-	if n := p.Count(Unarchive); n != 2 {
-		t.Errorf("plan unarchives %d, want 2", n)
+	if n, chats := p.Count(Unarchive), p.Chats(Unarchive); n != 2 || chats != 1 {
+		t.Errorf("plan unarchives %d cards of %d chats, want 2 cards of 1 chat", n, chats)
 	}
 	_, err = f.Apply(p)
 	must(t, err)
@@ -53,12 +53,24 @@ func TestSyncKeepsAsArchivedStateOverNewerContent(t *testing.T) {
 	f.card(third, "c9", s3, "Trip, draft", now-20000, "")
 	p, err := f.PlanSync(f.list("work"))
 	must(t, err)
+	// A's own copy and third's get newer content, third's archived on the way; personal's
+	// content is the newest already, so it only gets archived.
+	also := map[string]Action{}
+	for _, s := range p.Steps {
+		if s.Action == Update {
+			also[s.List.Dir] = s.Also
+		}
+	}
+	want := map[string]Action{f.listDir(work): "", f.listDir(third): Archive}
+	if p.Count(Archive) != 1 || len(also) != 2 || also[f.listDir(work)] != "" || also[f.listDir(third)] != Archive {
+		t.Errorf("plan archives %d, updates %v, want 1 archive and updates %v", p.Count(Archive), also, want)
+	}
 	_, err = f.Apply(p)
 	must(t, err)
-	want := `{"sessionId":"local_c9","cliSessionId":"` + s3 + `","cwd":` + str(proj) + `,"title":"Trip, revised","lastActivityAt":` + fmt.Sprint(now-1000) + `,"isArchived":true,"isStarred":true}`
+	card := `{"sessionId":"local_c9","cliSessionId":"` + s3 + `","cwd":` + str(proj) + `,"title":"Trip, revised","lastActivityAt":` + fmt.Sprint(now-1000) + `,"isArchived":true,"isStarred":true}`
 	for _, account := range []string{work, pers, third} {
-		if got := f.read(filepath.Join(f.listDir(account), "local_c9.json")); got != want {
-			t.Errorf("%s holds\n%s\nwant\n%s", account, got, want)
+		if got := f.read(filepath.Join(f.listDir(account), "local_c9.json")); got != card {
+			t.Errorf("%s holds\n%s\nwant\n%s", account, got, card)
 		}
 	}
 }

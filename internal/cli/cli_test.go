@@ -255,6 +255,49 @@ func TestSyncJSON(t *testing.T) {
 	}
 }
 
+// The counts and the groups count chats, not the lists each one writes: a chat pushed to two
+// lists is one line naming both, and an update that also changes the archived state says so.
+func TestSyncCountsChats(t *testing.T) {
+	f := chatFixture(t)
+	const third = "33333333-3333-4333-8333-333333333333"
+	archived := func(account, id, session, title string, last time.Time) {
+		path := f.card(account, id, session, title, last)
+		f.put(path, strings.TrimSuffix(f.read(path), "}")+`,"isArchived":true}`)
+	}
+	hour := time.Now().Add(-time.Hour)
+	f.card(work, "c1", s1, "Design review", hour) // as new as the archived copies elsewhere
+	archived(pers, "c1", s1, "Design review", hour)
+	archived(third, "c1", s1, "Design review", hour)
+	archived(third, "c3", s3, "Holiday, older", hour)
+	r := f.run("sync", "--to", "work")
+	if !strings.Contains(r.err, i18n.T("cli.plan.sync.counts", "pull", 1, "create", 1, "update", 1, "archive", 0, "unarchive", 1, "delete", 0, "conflict", 0, "to", "work")) {
+		t.Errorf("sync counts chats:\n%s", r.err)
+	}
+	for _, want := range []struct{ heading, title, lists, also string }{
+		{"New in other lists (1)", "Release notes", "personal, account 33333333", ""},
+		{"Unarchive (1)", "Design review", "personal, account 33333333", ""},
+		{"Update (1)", persianTitle, "account 33333333", i18n.T("cli.sync.also.unarchive")},
+	} {
+		at := strings.Index(r.err, want.heading)
+		if at < 0 {
+			t.Fatalf("preview lacks group %q:\n%s", want.heading, r.err)
+		}
+		rest := strings.SplitN(r.err[at:], "\n", 4)
+		line := rest[1]
+		if !strings.Contains(line, want.title) || !strings.Contains(line, want.lists) || strings.Contains(rest[2], want.title) {
+			t.Errorf("group %q line = %q, want one line for %q naming %s", want.heading, line, want.title, want.lists)
+		}
+		if want.also != "" && !strings.Contains(line, want.also) {
+			t.Errorf("group %q line = %q, want it marked %q", want.heading, line, want.also)
+		}
+	}
+	type stepJSON struct{ Action, ID, List, Also string }
+	out := decode[struct{ Steps []stepJSON }](t, f.ok("sync", "--to", "work", "--yes", "--json"))
+	if !slices.Contains(out.Steps, stepJSON{Action: "update", ID: "local_c3", List: "account 33333333", Also: "unarchive"}) {
+		t.Errorf("sync --json marks the update that unarchives: %+v", out.Steps)
+	}
+}
+
 func TestSyncSkipsConflicts(t *testing.T) {
 	f := chatFixture(t)
 	// work deleted c3 two days ago; personal has used it since.

@@ -34,8 +34,8 @@ const (
 	Update    Action = "update"     // the target has an older copy; it is backed up and replaced
 	SkipNewer Action = "skip-newer" // the target's copy is as new or newer; it is left alone
 	Pull      Action = "pull"       // sync: list A lacks a chat another list has; it is copied into A
-	Archive   Action = "archive"    // sync: the list's copy gets archived because A's is (its content may update too)
-	Unarchive Action = "unarchive"  // sync: the list's copy gets unarchived because A's is not
+	Archive   Action = "archive"    // sync: the list's copy gets archived because A's is; its content is the newest already
+	Unarchive Action = "unarchive"  // sync: the list's copy gets unarchived because A's is not; its content is the newest already
 	Delete    Action = "delete"     // sync: the chat was deleted in A; this card is backed up and removed
 	Conflict  Action = "conflict"   // sync: deleted in A but used elsewhere since; left alone
 )
@@ -52,6 +52,9 @@ type Step struct {
 	// Archived is the archived state a sync writes: A's when A holds the chat. Copy and move
 	// leave the card as it is.
 	Archived bool
+	// Also is the archived change an Update makes on the way, Archive or Unarchive; empty when
+	// the list's copy already has the archived state written.
+	Also Action
 }
 
 // Plan is a change worked out before anything is written, for the caller to show and confirm.
@@ -71,6 +74,52 @@ func (p Plan) Count(a Action) int {
 		}
 	}
 	return n
+}
+
+// Chats is how many chats have a step taking action a, however many lists those steps write.
+func (p Plan) Chats(a Action) int {
+	seen := map[string]bool{}
+	for _, s := range p.Steps {
+		if s.Action == a {
+			seen[s.Chat.ID] = true
+		}
+	}
+	return len(seen)
+}
+
+// ChatSteps is one chat's steps that take one action, one per list they write: a preview line.
+type ChatSteps struct {
+	Action Action
+	Chat   Chat // the first step's copy
+	Steps  []Step
+}
+
+// ByChat groups a sync plan's steps by action in SyncOrder, then by chat, chats in plan order.
+func (p Plan) ByChat() []ChatSteps {
+	var out []ChatSteps
+	for _, a := range SyncOrder {
+		at := map[string]int{}
+		for _, s := range p.Steps {
+			if s.Action != a {
+				continue
+			}
+			i, ok := at[s.Chat.ID]
+			if !ok {
+				i = len(out)
+				at[s.Chat.ID] = i
+				out = append(out, ChatSteps{Action: a, Chat: s.Chat})
+			}
+			out[i].Steps = append(out[i].Steps, s)
+		}
+	}
+	return out
+}
+
+// Without is the plan with every step of the chats named left out (the preview's exclude): a
+// chat left out is written nowhere.
+func (p Plan) Without(ids ...string) Plan {
+	p.Steps = slices.DeleteFunc(slices.Clone(p.Steps), func(s Step) bool { return slices.Contains(ids, s.Chat.ID) })
+	return p
 }
 
 // Result is what a change did.
@@ -118,33 +167,13 @@ func (e *Env) PlanSync(to List) (Plan, error) {
 	if to.Dir == "" {
 		return Plan{}, errf(NoList, "ref", "")
 	}
-	index, err := e.Index(e.Projects)
+	all, err := e.holdings(to)
 	if err != nil {
 		return Plan{}, err
-	}
-	lists, err := e.Lists()
-	if err != nil {
-		return Plan{}, err
-	}
-	type held struct {
-		list  List
-		chats map[string]Chat
-	}
-	all := []held{{list: to}}
-	for _, l := range lists {
-		if !sameDir(l.Dir, to.Dir) {
-			all = append(all, held{list: l})
-		}
 	}
 	newest, copies := map[string]Chat{}, map[string][]Chat{}
-	for i := range all {
-		chats, err := chatsOf(all[i].list, index)
-		if err != nil {
-			return Plan{}, err
-		}
-		all[i].chats = map[string]Chat{}
-		for _, c := range chats {
-			all[i].chats[c.ID] = c
+	for _, h := range all {
+		for _, c := range h.chats {
 			copies[c.ID] = append(copies[c.ID], c)
 			if n, ok := newest[c.ID]; !ok || c.Last.After(n.Last) {
 				newest[c.ID] = c
@@ -169,38 +198,101 @@ func (e *Env) PlanSync(to List) (Plan, error) {
 			gone = append(gone, Step{Action: Conflict, Chat: c, List: c.List, Target: c.Path})
 			continue
 		}
-		for _, have := range copies[c.ID] {
-			gone = append(gone, Step{Action: Delete, Chat: have, List: have.List, Target: have.Path})
-		}
+		gone = append(gone, deletions(all, c.ID)...)
 	}
 	p := Plan{Kind: Sync, To: to}
-	for _, h := range all {
+	for i, h := range all {
 		for _, c := range slices.SortedFunc(maps.Values(newest), newestFirst) {
 			archived := c.Archived
 			if a, ok := all[0].chats[c.ID]; ok {
 				archived = a.Archived // archived state follows A
 			}
-			action := Create
-			if h.list.Dir == to.Dir {
-				action = Pull
+			missing := Create
+			if i == 0 {
+				missing = Pull
 			}
-			if have, ok := h.chats[c.ID]; ok {
-				switch {
-				case have.Archived != archived && archived:
-					action = Archive
-				case have.Archived != archived:
-					action = Unarchive
-				case !c.Last.After(have.Last):
-					continue // already the newest copy
-				default:
-					action = Update
-				}
+			if s, ok := push(c, archived, h, missing); ok {
+				p.Steps = append(p.Steps, s)
 			}
-			p.Steps = append(p.Steps, Step{Action: action, Chat: c, List: h.list, Target: filepath.Join(h.list.Dir, c.ID+".json"), Archived: archived})
 		}
 	}
 	p.Steps = append(p.Steps, gone...)
 	return p, nil
+}
+
+// holding is one chat list and its chats by id.
+type holding struct {
+	list  List
+	chats map[string]Chat
+}
+
+// holdings reads every chat list's chats, to's first.
+func (e *Env) holdings(to List) ([]holding, error) {
+	index, err := e.Index(e.Projects)
+	if err != nil {
+		return nil, err
+	}
+	lists, err := e.Lists()
+	if err != nil {
+		return nil, err
+	}
+	order := []List{to}
+	for _, l := range lists {
+		if !sameDir(l.Dir, to.Dir) {
+			order = append(order, l)
+		}
+	}
+	all := make([]holding, len(order))
+	for i, l := range order {
+		chats, err := chatsOf(l, index)
+		if err != nil {
+			return nil, err
+		}
+		all[i] = holding{list: l, chats: map[string]Chat{}}
+		for _, c := range chats {
+			all[i].chats[c.ID] = c
+		}
+	}
+	return all, nil
+}
+
+// push is the step that writes c, with the archived state given, into h's list: missing when the
+// list lacks the chat, Update when its copy is older (Also naming an archived change on the way),
+// Archive or Unarchive when only the archived state differs. ok is false when the list already
+// has the chat as it would be written.
+func push(c Chat, archived bool, h holding, missing Action) (Step, bool) {
+	s := Step{Action: missing, Chat: c, List: h.list, Target: filepath.Join(h.list.Dir, c.ID+".json"), Archived: archived}
+	have, ok := h.chats[c.ID]
+	if !ok {
+		return s, true
+	}
+	var change Action
+	if have.Archived != archived {
+		change = Unarchive
+		if archived {
+			change = Archive
+		}
+	}
+	switch {
+	case c.Last.After(have.Last):
+		s.Action, s.Also = Update, change
+	case change != "":
+		s.Action = change
+	default:
+		return Step{}, false
+	}
+	return s, true
+}
+
+// deletions are the steps that delete chat id from every list holding it.
+func deletions(all []holding, id string) []Step {
+	var out []Step
+	for _, h := range all {
+		if have, ok := h.chats[id]; ok {
+			out = append(out, Step{Action: Delete, Chat: have, List: h.list, Target: have.Path})
+		}
+	}
+	return out
 }
 
 // markers maps each transcript id deleted in list l to when it was deleted: the marker holds the
@@ -283,6 +375,22 @@ func withArchived(card *claude.Card, data []byte, archived bool) ([]byte, error)
 	return card.Marshal(), nil
 }
 
+// freshFunc is the bytes a step writes from the source card and what newest wins says to do
+// with them, decided against the target as it is now.
+type freshFunc func(card *claude.Card, data []byte, s Step) ([]byte, Action, error)
+
+// fresh is freshFunc for a copy or move: the bytes as they are.
+func fresh(card *claude.Card, data []byte, s Step) ([]byte, Action, error) {
+	return data, decide(lastOf(card), s.Target), nil
+}
+
+// freshSync is freshFunc for a sync: the card gets the step's archived state, and a copy just as
+// new is written over when only that differs.
+func freshSync(card *claude.Card, data []byte, s Step) ([]byte, Action, error) {
+	data, err := withArchived(card, data, s.Archived)
+	return data, decideSync(lastOf(card), s.Archived, s.Target), err
+}
+
 // Apply carries out a plan, journaled so Undo restores every byte. Each step is decided again
 // against the files as they are now, so a stale plan never writes over a newer card.
 func (e *Env) Apply(p Plan) (Result, error) {
@@ -294,8 +402,12 @@ func (e *Env) Apply(p Plan) (Result, error) {
 	if err != nil {
 		return res, err
 	}
+	write := fresh
+	if p.Kind == Sync {
+		write = freshSync
+	}
 	for _, s := range p.Steps {
-		if err = apply(j, p.Kind, s, &res); err != nil {
+		if err = apply(j, s, write, p.Kind == Move, &res); err != nil {
 			break
 		}
 	}
@@ -306,7 +418,9 @@ func (e *Env) Apply(p Plan) (Result, error) {
 	return res, err
 }
 
-func apply(j *store.Journal, kind string, s Step, res *Result) error {
+// apply carries out one step: write works out the bytes and what to do with them, and a move
+// then removes the source card.
+func apply(j *store.Journal, s Step, write freshFunc, move bool, res *Result) error {
 	switch s.Action {
 	case Conflict:
 		return nil
@@ -321,17 +435,14 @@ func apply(j *store.Journal, kind string, s Step, res *Result) error {
 	if err != nil {
 		return err
 	}
-	a := decide(lastOf(card), s.Target)
-	if kind == Sync {
-		if data, err = withArchived(card, data, s.Archived); err != nil {
-			return err
-		}
-		a = decideSync(lastOf(card), s.Archived, s.Target)
+	data, a, err := write(card, data, s)
+	if err != nil {
+		return err
 	}
 	if err := writeCard(j, s.Target, data, a, res); err != nil {
 		return err
 	}
-	if kind != Move {
+	if !move {
 		return nil
 	}
 	if err := j.Removed(s.Chat.Path); err != nil {
