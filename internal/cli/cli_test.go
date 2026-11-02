@@ -173,7 +173,7 @@ func TestSync(t *testing.T) {
 	f.card(pers, "c1", s1, "Design review (older copy)", time.Now().Add(-100*time.Hour))
 	workBefore, persBefore := hash(workDir), hash(persDir)
 	r := f.ok("sync", "--to", "work", "--yes")
-	if !strings.Contains(r.err, i18n.T("cli.plan.sync.counts", "pull", 1, "create", 1, "update", 1, "archive", 0, "unarchive", 0, "to", "work")) {
+	if !strings.Contains(r.err, i18n.T("cli.plan.sync.counts", "pull", 1, "create", 1, "update", 1, "archive", 0, "unarchive", 0, "delete", 0, "conflict", 0, "to", "work")) {
 		t.Errorf("sync prints its counts first:\n%s", r.err)
 	}
 	if !exist(filepath.Join(workDir, "local_c3.json")) || strings.Contains(f.read(filepath.Join(workDir, "local_c1.json")), "older copy") {

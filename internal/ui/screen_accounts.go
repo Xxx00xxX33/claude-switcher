@@ -303,13 +303,13 @@ func planSync(c *Ctx, name string, to ops.List) tea.Cmd {
 
 func (s *accountsScreen) confirmSync(c *Ctx, name string, plan ops.Plan) tea.Cmd {
 	title := i18n.T("ui.sync.title", "name", name)
-	pull, add, upd := plan.Count(ops.Pull), plan.Count(ops.Create), plan.Count(ops.Update)
+	pull, add, upd, del := plan.Count(ops.Pull), plan.Count(ops.Create), plan.Count(ops.Update), plan.Count(ops.Delete)
 	arch, unarch := plan.Count(ops.Archive), plan.Count(ops.Unarchive)
-	if pull+add+upd+arch+unarch == 0 {
+	if pull+add+upd+del+arch+unarch == 0 {
 		c.Alert(title, i18n.T("ui.sync.nothing"))
 		return nil
 	}
-	counts := i18n.T("ui.sync.counts", "pull", pull, "name", name, "new", add, "updated", upd, "archived", arch, "unarchived", unarch)
+	counts := i18n.T("ui.sync.counts", "pull", pull, "name", name, "new", add, "updated", upd, "archived", arch, "unarchived", unarch, "deleted", del, "conflict", plan.Count(ops.Conflict))
 	env := c.Env
 	c.Confirm(title, counts+"\n"+i18n.T("ui.sync.body", "name", name), i18n.T("action.sync"), false, func() tea.Cmd {
 		return c.Change(change{

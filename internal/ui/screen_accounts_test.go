@@ -17,7 +17,7 @@ func TestSyncBringsChats(t *testing.T) {
 	env, _ := fixture(t)
 	a := newTestApp(t, env, 100, 30)
 	a.Update(press(a, "m")()) // work has one chat list, so the plan is worked out at once
-	if a.dialog == nil || !strings.Contains(a.dialog.body, i18n.T("ui.sync.counts", "pull", 2, "name", "work", "new", 3, "updated", 0, "archived", 0, "unarchived", 0)) {
+	if a.dialog == nil || !strings.Contains(a.dialog.body, i18n.T("ui.sync.counts", "pull", 2, "name", "work", "new", 3, "updated", 0, "archived", 0, "unarchived", 0, "deleted", 0, "conflict", 0)) {
 		t.Fatalf("m should show the plan's counts first; dialog %+v", a.dialog)
 	}
 	press(a, "y")

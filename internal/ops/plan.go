@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 	"slices"
+	"strconv"
 	"strings"
 	"time"
 
@@ -35,6 +36,8 @@ const (
 	Pull      Action = "pull"       // sync: list A lacks a chat another list has; it is copied into A
 	Archive   Action = "archive"    // sync: the list's copy gets archived because A's is (its content may update too)
 	Unarchive Action = "unarchive"  // sync: the list's copy gets unarchived because A's is not
+	Delete    Action = "delete"     // sync: the chat was deleted in A; this card is backed up and removed
+	Conflict  Action = "conflict"   // sync: deleted in A but used elsewhere since; left alone
 )
 
 // Step is one chat of a plan.
@@ -73,7 +76,7 @@ type Result struct {
 	Created int
 	Updated int
 	Skipped int // the target already had the chat as new or newer
-	Removed int // source cards removed by a move
+	Removed int // source cards removed by a move, or cards a sync deleted
 }
 
 // PlanTransfer plans copying (or moving) chats from one list to another. ids are chat
@@ -130,7 +133,7 @@ func (e *Env) PlanSync(to List) (Plan, error) {
 			all = append(all, held{list: l})
 		}
 	}
-	newest := map[string]Chat{}
+	newest, copies := map[string]Chat{}, map[string][]Chat{}
 	for i := range all {
 		chats, err := chatsOf(all[i].list, index)
 		if err != nil {
@@ -139,9 +142,32 @@ func (e *Env) PlanSync(to List) (Plan, error) {
 		all[i].chats = map[string]Chat{}
 		for _, c := range chats {
 			all[i].chats[c.ID] = c
+			copies[c.ID] = append(copies[c.ID], c)
 			if n, ok := newest[c.ID]; !ok || c.Last.After(n.Last) {
 				newest[c.ID] = c
 			}
+		}
+	}
+	marks, err := markers(to)
+	if err != nil {
+		return Plan{}, err
+	}
+	var gone []Step
+	for _, c := range slices.SortedFunc(maps.Values(newest), newestFirst) {
+		if _, kept := all[0].chats[c.ID]; kept {
+			continue
+		}
+		when, ok := markedAt(copies[c.ID], marks)
+		if !ok {
+			continue // never in A, or lost from it without a marker: pulled in below
+		}
+		delete(newest, c.ID)
+		if c.Last.After(when) {
+			gone = append(gone, Step{Action: Conflict, Chat: c, List: c.List, Target: c.Path})
+			continue
+		}
+		for _, have := range copies[c.ID] {
+			gone = append(gone, Step{Action: Delete, Chat: have, List: have.List, Target: have.Path})
 		}
 	}
 	p := Plan{Kind: Sync, To: to}
@@ -170,7 +196,46 @@ func (e *Env) PlanSync(to List) (Plan, error) {
 			p.Steps = append(p.Steps, Step{Action: action, Chat: c, List: h.list, Target: filepath.Join(h.list.Dir, c.ID+".json"), Archived: archived})
 		}
 	}
+	p.Steps = append(p.Steps, gone...)
 	return p, nil
+}
+
+// markers maps each transcript id deleted in list l to when it was deleted: the marker holds the
+// time in ms; the file's modification time stands in when it does not.
+func markers(l List) (map[string]time.Time, error) {
+	ids, err := l.Tombstones()
+	if err != nil {
+		return nil, err
+	}
+	out := make(map[string]time.Time, len(ids))
+	for _, id := range ids {
+		path := filepath.Join(l.Dir, "deleted_"+id)
+		data, err := os.ReadFile(path)
+		if err != nil {
+			return nil, err
+		}
+		if ms, err := strconv.ParseInt(strings.TrimSpace(string(data)), 10, 64); err == nil && ms > 0 {
+			out[id] = time.UnixMilli(ms)
+		} else if st, err := os.Stat(path); err == nil {
+			out[id] = st.ModTime()
+		}
+	}
+	return out, nil
+}
+
+// markedAt is when the latest marker naming a current or prior transcript of any copy of a chat
+// was made, and whether there is one.
+func markedAt(copies []Chat, marks map[string]time.Time) (time.Time, bool) {
+	var when time.Time
+	found := false
+	for _, c := range copies {
+		for _, id := range append([]string{c.Session}, c.Prior...) {
+			if t, ok := marks[id]; ok && id != "" && (!found || t.After(when)) {
+				when, found = t, true
+			}
+		}
+	}
+	return when, found
 }
 
 func newestFirst(a, b Chat) int { return cmp.Or(b.Last.Compare(a.Last), strings.Compare(a.ID, b.ID)) }
@@ -239,6 +304,12 @@ func (e *Env) Apply(p Plan) (Result, error) {
 }
 
 func apply(j *store.Journal, kind string, s Step, res *Result) error {
+	switch s.Action {
+	case Conflict:
+		return nil
+	case Delete:
+		return removeCard(j, s, res)
+	}
 	data, err := os.ReadFile(s.Chat.Path)
 	if err != nil {
 		return err
@@ -264,6 +335,27 @@ func apply(j *store.Journal, kind string, s Step, res *Result) error {
 		return err
 	}
 	if err := os.Remove(s.Chat.Path); err != nil {
+		return err
+	}
+	res.Removed++
+	return nil
+}
+
+// removeCard backs up and removes a card a sync deletes, unless it was used after the plan was
+// worked out.
+func removeCard(j *store.Journal, s Step, res *Result) error {
+	c, err := claude.ReadCard(s.Target)
+	if errors.Is(err, fs.ErrNotExist) {
+		return nil
+	}
+	if err == nil && lastOf(c).After(s.Chat.Last) {
+		res.Skipped++
+		return nil
+	}
+	if err := j.Removed(s.Target); err != nil {
+		return err
+	}
+	if err := os.Remove(s.Target); err != nil {
 		return err
 	}
 	res.Removed++
@@ -298,7 +390,7 @@ func writeCard(j *store.Journal, target string, data []byte, a Action, res *Resu
 }
 
 func summary(p Plan) string {
-	n := len(p.Steps)
+	n := len(p.Steps) - p.Count(Conflict)
 	switch p.Kind {
 	case Sync:
 		return i18n.T("ops.done.sync", "n", n, "to", p.To.Label)
