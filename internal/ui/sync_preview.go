@@ -1,6 +1,7 @@
 package ui
 
 import (
+	"slices"
 	"strings"
 
 	"charm.land/bubbles/v2/key"
@@ -10,19 +11,16 @@ import (
 	"github.com/nyxon-tech/claude-switcher/v3/internal/ops"
 )
 
-// syncGroups are the preview's groups in order, one per step action. A new action is one entry;
-// a step whose action has none still shows, in a group of its own at the end.
-var syncGroups = []struct {
-	action ops.Action
-	key    string
-}{
-	{ops.Pull, "ui.sync.group.pull"},
-	{ops.Create, "ui.sync.group.create"},
-	{ops.Update, "ui.sync.group.update"},
-	{ops.Delete, "ui.sync.group.delete"},
-	{ops.Archive, "ui.sync.group.archive"},
-	{ops.Unarchive, "ui.sync.group.unarchive"},
-	{ops.Conflict, "ui.sync.group.conflict"},
+// syncHeadings label the preview's groups, which follow ops.SyncOrder. A step whose action has
+// no group there still shows, in a group of its own at the end.
+var syncHeadings = map[ops.Action]string{
+	ops.Pull:      "ui.sync.group.pull",
+	ops.Create:    "ui.sync.group.create",
+	ops.Update:    "ui.sync.group.update",
+	ops.Delete:    "ui.sync.group.delete",
+	ops.Archive:   "ui.sync.group.archive",
+	ops.Unarchive: "ui.sync.group.unarchive",
+	ops.Conflict:  "ui.sync.group.conflict",
 }
 
 // choice is what the user decided for a conflict.
@@ -54,7 +52,6 @@ type previewLine struct {
 
 func newSyncPreview(name string, plan ops.Plan) *syncPreview {
 	p := &syncPreview{name: name, plan: plan, out: map[int]bool{}, chosen: map[int]choice{}}
-	known := map[ops.Action]bool{}
 	group := func(a ops.Action, heading func(n int) string) {
 		var idx []int
 		for i, s := range plan.Steps {
@@ -70,15 +67,19 @@ func newSyncPreview(name string, plan ops.Plan) *syncPreview {
 			p.lines = append(p.lines, previewLine{step: i})
 		}
 	}
-	for _, g := range syncGroups {
-		known[g.action] = true
-		group(g.action, func(n int) string { return i18n.T(g.key, "name", name, "n", n) })
-	}
+	order := slices.Clone(ops.SyncOrder)
 	for _, s := range plan.Steps {
-		if a := s.Action; !known[a] {
-			known[a] = true
-			group(a, func(n int) string { return string(a) + " (" + i18n.N(int64(n)) + ")" })
+		if !slices.Contains(order, s.Action) {
+			order = append(order, s.Action)
 		}
+	}
+	for _, a := range order {
+		group(a, func(n int) string {
+			if k, ok := syncHeadings[a]; ok {
+				return i18n.T(k, "name", name, "n", n)
+			}
+			return string(a) + " (" + i18n.N(int64(n)) + ")"
+		})
 	}
 	p.cursor = p.next(0, 1)
 	return p
