@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"slices"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -197,6 +198,78 @@ func TestSync(t *testing.T) {
 	f.ok("undo", "--yes")
 	if !strings.Contains(f.read(older), "older copy") {
 		t.Error("undo puts the older copy back")
+	}
+}
+
+func TestSyncPreview(t *testing.T) {
+	f := chatFixture(t)
+	f.card(pers, "c1", s1, "Design review (older copy)", time.Now().Add(-100*time.Hour))
+	workDir, persDir := f.listDir(work), f.listDir(pers)
+	workBefore, persBefore := hash(workDir), hash(persDir)
+
+	r := f.run("sync", "--to", "work")
+	f.want(r, exitRefused, "sync without --yes and no terminal to ask on")
+	if hash(workDir) != workBefore || hash(persDir) != persBefore {
+		t.Fatal("sync writes nothing before it is confirmed")
+	}
+	// Each group has a heading, and each line names the chat, its project and the list it changes.
+	for _, want := range []struct{ heading, title, list string }{
+		{"Pull into work (1)", persianTitle, "work"},
+		{"New in other lists (1)", "Release notes", "personal"},
+		{"Update (1)", "Design review", "personal"},
+	} {
+		at := strings.Index(r.err, want.heading)
+		if at < 0 {
+			t.Fatalf("preview lacks group %q:\n%s", want.heading, r.err)
+		}
+		line := strings.SplitN(r.err[at:], "\n", 3)[1]
+		if !strings.Contains(line, want.title) || !strings.Contains(line, "proj") || !strings.Contains(line, want.list) {
+			t.Errorf("group %q line = %q, want title, project and list", want.heading, line)
+		}
+	}
+	for _, empty := range []string{"Delete (", "Archive (", "Unarchive (", "Conflict"} {
+		if strings.Contains(r.err, empty) {
+			t.Errorf("preview shows empty group %q:\n%s", empty, r.err)
+		}
+	}
+}
+
+func TestSyncJSON(t *testing.T) {
+	f := chatFixture(t)
+	f.card(pers, "c1", s1, "Design review (older copy)", time.Now().Add(-100*time.Hour))
+	type stepJSON struct{ Action, ID, Title, Project, List string }
+	out := decode[struct {
+		Kind  string
+		Steps []stepJSON
+	}](t, f.ok("sync", "--to", "work", "--yes", "--json"))
+	got := map[string]string{}
+	for _, s := range out.Steps {
+		if s.Project != "proj" {
+			t.Errorf("step %+v lacks its project", s)
+		}
+		got[s.Action] += s.Title + "@" + s.List + ";"
+	}
+	want := map[string]string{"pull": persianTitle + "@work;", "create": "Release notes@personal;", "update": "Design review@personal;"}
+	if out.Kind != "sync" || !maps.Equal(got, want) {
+		t.Errorf("sync --json steps = %v, want %v", got, want)
+	}
+}
+
+func TestSyncSkipsConflicts(t *testing.T) {
+	f := chatFixture(t)
+	// work deleted c3 two days ago; personal has used it since.
+	f.put(filepath.Join(f.listDir(work), "deleted_"+s3), strconv.FormatInt(time.Now().Add(-48*time.Hour).UnixMilli(), 10))
+	persC3 := filepath.Join(f.listDir(pers), "local_c3.json")
+	before := f.read(persC3)
+	r := f.ok("sync", "--to", "work", "--yes")
+	if at := strings.Index(r.err, "Conflict"); at < 0 || !strings.Contains(r.err[at:], persianTitle) {
+		t.Errorf("preview lists the conflict:\n%s", r.err)
+	}
+	if exist(filepath.Join(f.listDir(work), "local_c3.json")) || f.read(persC3) != before {
+		t.Fatal("sync --yes never applies a conflict")
+	}
+	if !strings.Contains(r.out, "1 conflict left alone") {
+		t.Errorf("sync reports the conflicts it skipped:\n%s", r.out)
 	}
 }
 

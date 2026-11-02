@@ -40,6 +40,9 @@ const (
 	Conflict  Action = "conflict"   // sync: deleted in A but used elsewhere since; left alone
 )
 
+// SyncOrder is the order a sync preview groups its steps in, one group per action.
+var SyncOrder = []Action{Pull, Create, Update, Delete, Archive, Unarchive, Conflict}
+
 // Step is one chat of a plan.
 type Step struct {
 	Action Action

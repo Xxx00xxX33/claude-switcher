@@ -227,28 +227,76 @@ func (a *app) pointer() string { return a.st.accent.Render("›") }
 
 // apply shows a plan, asks, and carries it out once Desktop is closed.
 func (a *app) apply(ctx context.Context, env *ops.Env, p ops.Plan) error {
-	a.say(a.err, a.pointer(), a.st.plain, i18n.T("cli.plan."+p.Kind, "n", len(p.Steps), "from", p.From.Label, "to", p.To.Label))
+	a.say(a.err, a.pointer(), a.st.plain, i18n.T("cli.plan."+p.Kind, "n", len(p.Steps)-p.Count(ops.Conflict), "from", p.From.Label, "to", p.To.Label))
 	if p.Kind == ops.Sync {
 		a.note(a.err, i18n.T("cli.plan.sync.counts", "pull", p.Count(ops.Pull), "create", p.Count(ops.Create), "update", p.Count(ops.Update), "archive", p.Count(ops.Archive), "unarchive", p.Count(ops.Unarchive), "delete", p.Count(ops.Delete), "conflict", p.Count(ops.Conflict), "to", p.To.Label))
+		a.preview(p)
 	} else {
 		a.note(a.err, i18n.T("cli.plan.counts", "create", p.Count(ops.Create), "update", p.Count(ops.Update), "skip", p.Count(ops.SkipNewer)))
 	}
-	// A move still removes the source cards when the target already has newer copies.
-	if p.Count(ops.Create)+p.Count(ops.Update)+p.Count(ops.Pull)+p.Count(ops.Delete)+p.Count(ops.Archive)+p.Count(ops.Unarchive) == 0 && (p.Kind != ops.Move || len(p.Steps) == 0) {
-		return a.changed(p.Kind, p.From.Label, p.To.Label, ops.Result{Summary: nothing(p), Skipped: len(p.Steps)}, false)
+	// The command line never decides a conflict: it is reported and left alone.
+	skipped := p.Count(ops.Conflict)
+	writes := len(p.Steps) - skipped
+	if p.Kind != ops.Move { // a move still removes the source cards when the target has newer copies
+		writes -= p.Count(ops.SkipNewer)
+	}
+	if writes == 0 {
+		return a.conflicts(skipped, a.changed(p.Kind, p.From.Label, p.To.Label, ops.Result{Summary: nothing(p), Skipped: len(p.Steps)}, false, syncSteps(p)...))
 	}
 	if err := a.confirm(ctx, i18n.T("cli.confirm.proceed")); err != nil {
 		return err
 	}
+	w := p
+	w.Steps = slices.DeleteFunc(slices.Clone(p.Steps), func(s ops.Step) bool { return s.Action == ops.Conflict })
 	var res ops.Result
 	err := a.write(ctx, env, false, func() (err error) {
-		res, err = env.Apply(p)
+		res, err = env.Apply(w)
 		return err
 	})
 	if err != nil {
 		return err
 	}
-	return a.changed(p.Kind, p.From.Label, p.To.Label, res, true)
+	return a.conflicts(skipped, a.changed(p.Kind, p.From.Label, p.To.Label, res, true, syncSteps(p)...))
+}
+
+// conflicts warns about the n conflicts a sync left alone, once it has reported without err.
+func (a *app) conflicts(n int, err error) error {
+	if err == nil && n > 0 && !a.flags.json {
+		a.warn(a.out, i18n.T("cli.sync.conflicts", "n", n))
+	}
+	return err
+}
+
+// preview lists a sync's steps grouped by action: each line names the chat, its project and the
+// list the step changes.
+func (a *app) preview(p ops.Plan) {
+	width := max(a.width-a.labelWidth()*2-10, 12)
+	for _, act := range ops.SyncOrder {
+		var lines []string
+		for _, s := range p.Steps {
+			if s.Action != act {
+				continue
+			}
+			title := a.fit(s.Chat.Title, width)
+			if s.Chat.Title == "" {
+				title = a.st.dim.Render(a.txt(i18n.T("cli.chats.untitled")))
+			}
+			sep := a.st.muted.Render("·")
+			lines = append(lines, a.line("   ", title, sep, a.st.muted.Render(a.fit(s.Chat.Project, a.labelWidth())),
+				sep, a.st.muted.Render(a.fit(s.List.Label, a.labelWidth()))))
+		}
+		if len(lines) == 0 {
+			continue
+		}
+		style := a.st.plain
+		if act == ops.Conflict {
+			style = a.st.warn
+		}
+		a.say(a.err, " ", style, i18n.T("cli.sync.group."+string(act), "n", len(lines), "to", p.To.Label))
+		for _, l := range lines {
+			a.print(a.err, l)
+		}
+	}
 }
 
 func nothing(p ops.Plan) string {
@@ -259,21 +307,46 @@ func nothing(p ops.Plan) string {
 }
 
 type changeJSON struct {
-	Kind    string `json:"kind"`
-	From    string `json:"from,omitempty"`
-	To      string `json:"to"`
-	Summary string `json:"summary"`
-	Created int    `json:"created"`
-	Updated int    `json:"updated"`
-	Skipped int    `json:"skipped"`
-	Removed int    `json:"removed"`
+	Kind    string     `json:"kind"`
+	From    string     `json:"from,omitempty"`
+	To      string     `json:"to"`
+	Summary string     `json:"summary"`
+	Created int        `json:"created"`
+	Updated int        `json:"updated"`
+	Skipped int        `json:"skipped"`
+	Removed int        `json:"removed"`
+	Steps   []stepJSON `json:"steps,omitempty"`
+}
+
+// stepJSON is one step of a sync, conflicts included.
+type stepJSON struct {
+	Action  ops.Action `json:"action"`
+	ID      string     `json:"id"`
+	Title   string     `json:"title"`
+	Project string     `json:"project"`
+	List    string     `json:"list"`
+	Account string     `json:"account"`
+	Org     string     `json:"org"`
+}
+
+// syncSteps is every step of a sync plan, for JSON output; other plans give none.
+func syncSteps(p ops.Plan) []stepJSON {
+	if p.Kind != ops.Sync {
+		return nil
+	}
+	out := make([]stepJSON, len(p.Steps))
+	for i, s := range p.Steps {
+		out[i] = stepJSON{Action: s.Action, ID: s.Chat.ID, Title: s.Chat.Title, Project: s.Chat.Project,
+			List: s.List.Label, Account: s.List.Account, Org: s.List.Org}
+	}
+	return out
 }
 
 // changed reports a finished change; wrote says whether it wrote anything undo can take back.
-func (a *app) changed(kind, from, to string, res ops.Result, wrote bool) error {
+func (a *app) changed(kind, from, to string, res ops.Result, wrote bool, steps ...stepJSON) error {
 	if a.flags.json {
 		return a.json(changeJSON{Kind: kind, From: from, To: to, Summary: res.Summary,
-			Created: res.Created, Updated: res.Updated, Skipped: res.Skipped, Removed: res.Removed})
+			Created: res.Created, Updated: res.Updated, Skipped: res.Skipped, Removed: res.Removed, Steps: steps})
 	}
 	a.done(a.out, res.Summary)
 	if wrote {
