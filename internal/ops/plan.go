@@ -33,6 +33,8 @@ const (
 	Update    Action = "update"     // the target has an older copy; it is backed up and replaced
 	SkipNewer Action = "skip-newer" // the target's copy is as new or newer; it is left alone
 	Pull      Action = "pull"       // sync: list A lacks a chat another list has; it is copied into A
+	Archive   Action = "archive"    // sync: the list's copy gets archived because A's is (its content may update too)
+	Unarchive Action = "unarchive"  // sync: the list's copy gets unarchived because A's is not
 )
 
 // Step is one chat of a plan.
@@ -41,6 +43,9 @@ type Step struct {
 	Chat   Chat   // the copy to write
 	List   List   // the list the step writes
 	Target string // its card file in List
+	// Archived is the archived state a sync writes: A's when A holds the chat. Copy and move
+	// leave the card as it is.
+	Archived bool
 }
 
 // Plan is a change worked out before anything is written, for the caller to show and confirm.
@@ -142,17 +147,27 @@ func (e *Env) PlanSync(to List) (Plan, error) {
 	p := Plan{Kind: Sync, To: to}
 	for _, h := range all {
 		for _, c := range slices.SortedFunc(maps.Values(newest), newestFirst) {
+			archived := c.Archived
+			if a, ok := all[0].chats[c.ID]; ok {
+				archived = a.Archived // archived state follows A
+			}
 			action := Create
 			if h.list.Dir == to.Dir {
 				action = Pull
 			}
 			if have, ok := h.chats[c.ID]; ok {
-				if !c.Last.After(have.Last) {
+				switch {
+				case have.Archived != archived && archived:
+					action = Archive
+				case have.Archived != archived:
+					action = Unarchive
+				case !c.Last.After(have.Last):
 					continue // already the newest copy
+				default:
+					action = Update
 				}
-				action = Update
 			}
-			p.Steps = append(p.Steps, Step{Action: action, Chat: c, List: h.list, Target: filepath.Join(h.list.Dir, c.ID+".json")})
+			p.Steps = append(p.Steps, Step{Action: action, Chat: c, List: h.list, Target: filepath.Join(h.list.Dir, c.ID+".json"), Archived: archived})
 		}
 	}
 	return p, nil
@@ -175,6 +190,31 @@ func decide(last time.Time, target string) Action {
 	return SkipNewer
 }
 
+// decideSync is decide for a sync, which also writes over a copy just as new when only its
+// archived state differs.
+func decideSync(last time.Time, archived bool, target string) Action {
+	a := decide(last, target)
+	if a != SkipNewer {
+		return a
+	}
+	if c, err := claude.ReadCard(target); err == nil && lastOf(c).Equal(last) && c.Archived() != archived {
+		return Update
+	}
+	return SkipNewer
+}
+
+// withArchived is a card's bytes with the archived state set, the bytes as they are when it
+// already has it, so every other field survives.
+func withArchived(card *claude.Card, data []byte, archived bool) ([]byte, error) {
+	if card.Archived() == archived {
+		return data, nil
+	}
+	if err := card.Set("isArchived", archived); err != nil {
+		return nil, err
+	}
+	return card.Marshal(), nil
+}
+
 // Apply carries out a plan, journaled so Undo restores every byte. Each step is decided again
 // against the files as they are now, so a stale plan never writes over a newer card.
 func (e *Env) Apply(p Plan) (Result, error) {
@@ -187,7 +227,7 @@ func (e *Env) Apply(p Plan) (Result, error) {
 		return res, err
 	}
 	for _, s := range p.Steps {
-		if err = apply(j, p.Kind == Move, s, &res); err != nil {
+		if err = apply(j, p.Kind, s, &res); err != nil {
 			break
 		}
 	}
@@ -198,7 +238,7 @@ func (e *Env) Apply(p Plan) (Result, error) {
 	return res, err
 }
 
-func apply(j *store.Journal, move bool, s Step, res *Result) error {
+func apply(j *store.Journal, kind string, s Step, res *Result) error {
 	data, err := os.ReadFile(s.Chat.Path)
 	if err != nil {
 		return err
@@ -207,10 +247,17 @@ func apply(j *store.Journal, move bool, s Step, res *Result) error {
 	if err != nil {
 		return err
 	}
-	if err := writeCard(j, s.Target, data, decide(lastOf(card), s.Target), res); err != nil {
+	a := decide(lastOf(card), s.Target)
+	if kind == Sync {
+		if data, err = withArchived(card, data, s.Archived); err != nil {
+			return err
+		}
+		a = decideSync(lastOf(card), s.Archived, s.Target)
+	}
+	if err := writeCard(j, s.Target, data, a, res); err != nil {
 		return err
 	}
-	if !move {
+	if kind != Move {
 		return nil
 	}
 	if err := j.Removed(s.Chat.Path); err != nil {

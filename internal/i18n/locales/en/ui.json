@@ -32,7 +32,7 @@
 	"ui.remove.body": "Its saved login is forgotten. Its chats stay in Claude Desktop, and you can save the account again later.",
 	"ui.remove.done": "Removed {name}",
 	"ui.sync.title": "Sync every account with “{name}”?",
-	"ui.sync.counts": "{pull} into “{name}” · {new} new elsewhere · {updated} updated",
+	"ui.sync.counts": "{pull} into “{name}” · {new} new elsewhere · {updated} updated · {archived} archived · {unarchived} unarchived",
 	"ui.sync.body": "The newest copy of every chat is copied into “{name}”, then to every other account. Nothing is removed, and you can undo it in Activity.",
 	"ui.sync.nothing": "Every account already has the newest copy of every chat.",
 	"ui.sync.no_list": "“{name}” has no chat list yet. Claude Desktop makes one the first time you use its Code tab with this account.",

@@ -120,7 +120,7 @@
 	"cli.plan.move.other": "Move {n} chats from {from} to {to}",
 	"cli.plan.sync.one": "Sync every chat list with {to}: {n} card to write",
 	"cli.plan.sync.other": "Sync every chat list with {to}: {n} cards to write",
-	"cli.plan.sync.counts": "{pull} into {to} · {create} new elsewhere · {update} updated",
+	"cli.plan.sync.counts": "{pull} into {to} · {create} new elsewhere · {update} updated · {archive} archived · {unarchive} unarchived",
 	"cli.plan.sync.nothing": "Nothing to do: every chat list already has the newest copy of every chat.",
 	"cli.plan.rescue.one": "Recover {n} chat into {to}",
 	"cli.plan.rescue.other": "Recover {n} chats into {to}",
