@@ -113,3 +113,34 @@ func TestSyncNeverRevivesChatsDeletedInA(t *testing.T) {
 		}
 	}
 }
+
+// A card left in A next to A's own marker made after the card was last used (the sales case: merge
+// brought the card back) counts as deleted in A: it goes from A and every other list, and the
+// marker stays. A card used after its marker is still alive.
+func TestSyncDeletesCardsOlderThanAsMarker(t *testing.T) {
+	f, now := chatFixture(t)
+	f.card(work, "c8", s8, "Pricing deck", now-500000, "")
+	f.card(pers, "c8", s8, "Pricing deck", now-500000, "")
+	f.card(work, "c9", s9, "Lead list", now-100000, "")
+	for _, s := range []string{s8, s9} {
+		f.put(filepath.Join(f.listDir(work), "deleted_"+s), fmt.Sprint(now-200000))
+	}
+	p, err := f.PlanSync(f.list("work"))
+	must(t, err)
+	if n := p.Chats(Delete); n != 1 || p.Count(Delete) != 2 {
+		t.Fatalf("plan should delete c8 from work and personal: %+v", p.Steps)
+	}
+	_, err = f.Apply(p)
+	must(t, err)
+	for _, dir := range []string{f.listDir(work), f.listDir(pers)} {
+		if f.exists(filepath.Join(dir, "local_c8.json")) {
+			t.Errorf("%s still holds c8", dir)
+		}
+		if !f.exists(filepath.Join(dir, "local_c9.json")) {
+			t.Errorf("%s should hold c9, used after its marker", dir)
+		}
+	}
+	if !f.exists(filepath.Join(f.listDir(work), "deleted_"+s8)) {
+		t.Error("A's marker for c8 should stay")
+	}
+}

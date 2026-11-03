@@ -193,7 +193,7 @@ func (e *Env) PlanSync(to List) (Plan, error) {
 	}
 	var gone []Step
 	for _, c := range slices.SortedFunc(maps.Values(newest), newestFirst) {
-		if _, kept := all[0].chats[c.ID]; kept {
+		if all[0].holds(c.ID) {
 			continue
 		}
 		when, ok := markedAt(copies[c.ID], all[0].marks)
@@ -231,6 +231,18 @@ type holding struct {
 	list  List
 	chats map[string]Chat
 	marks map[string]time.Time
+}
+
+// holds reports whether h still has chat id: its card, and no marker of its own made after the
+// card was last used. A card older than its marker is one Desktop's deletion left behind or a
+// merge brought back, so the chat counts as deleted there.
+func (h holding) holds(id string) bool {
+	c, ok := h.chats[id]
+	if !ok {
+		return false
+	}
+	when, marked := markedAt([]Chat{c}, h.marks)
+	return !marked || c.Last.After(when)
 }
 
 // holdings reads every chat list's chats, to's first.

@@ -56,7 +56,7 @@ Chat titles in Persian, Arabic or Hebrew display correctly, letters joined and r
 | --- | --- |
 | **Switch accounts** | Swap to another saved login and reopen Claude Desktop. No password, no email code. |
 | **Add an account** | Saves the login in use, then opens Desktop signed out so you can add the next one, without ever pressing Log out. |
-| **Copy, move, merge** | Chat by chat between any two accounts, or bring every chat into one account. Newest copy wins. |
+| **Copy, move, sync** | Chat by chat between any two accounts, or sync every account from one you choose: what it deleted or archived is deleted or archived everywhere, and the newest copy of each chat wins. |
 | **Recover** | Rebuilds sidebar entries for chats that only exist as history on disk. |
 | **Undo** | Every chat change is journaled with backups, so undo puts back every byte. |
 | **Usage** | Tokens by model, by day and by project, counted from your local transcripts. |
@@ -77,6 +77,7 @@ Claude Desktop keeps three things on disk, and Claude Switcher treats each one d
 
 - **Switching** copies Desktop's login files (`config.json`, cookies, local storage, a few MB) between its data folder and `~/.claude-instances/<profile>`. Desktop has to be closed for this, because it rewrites those files when it quits: Claude Switcher asks it to quit (on Windows you quit it from the tray icon), waits, swaps, and opens it again.
 - **Chats** live in two places. The history is one file per conversation, shared by every account. The sidebar is a small record per chat, kept separately for each account. Copying a chat copies that record; the history is only ever read.
+- **Sync** (`m` in the app, `sync --to <list>`) makes every other chat list match the one you pick. A chat it deleted (Desktop leaves a `deleted_` marker; a record older than its marker counts as deleted too) is deleted from it and the other lists, unless another copy was used after the deletion: that one is flagged as a conflict and left alone until you choose to delete it anyway or keep it. Archived state follows the list you picked, read from each chat's own record. Chats it has never seen are pulled in first, and the newest copy of every chat is written everywhere. Desktop must be closed, and one undo puts back the whole sync.
 - **Safety.** Before saving over a login it checks that Desktop is still signed into that same account, and refuses otherwise. Every chat change is journaled with backups first. Records are written the way Desktop expects them, and fields it does not know are kept byte for byte. The only network request is the optional daily check for a new release.
 
 | | Windows | macOS | Linux |
@@ -100,7 +101,7 @@ claude-switcher remove <name>                   forget a saved account; its chat
 claude-switcher chats [list] [--lost]           chats, newest first, or the ones to recover
 claude-switcher copy --from A --to B <ids...>   copy chats to another account
 claude-switcher move --from A --to B <ids...>   move chats to another account
-claude-switcher merge --to <list>               bring every chat into one account
+claude-switcher sync --to <list>                sync every account from this one
 claude-switcher rescue [--to <list>] [--all]    recover chats no sidebar shows
 claude-switcher export <id> [--format md]       save a chat as a web page or Markdown
 claude-switcher undo                            undo the last change
