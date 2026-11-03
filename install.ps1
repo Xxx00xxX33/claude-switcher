@@ -1,6 +1,6 @@
 # Claude Switcher by Nyxon - installer for Windows
-#   Install:    irm https://raw.githubusercontent.com/nyxon-tech/claude-switcher/main/install.ps1 | iex
-#   Uninstall:  & ([scriptblock]::Create((irm https://raw.githubusercontent.com/nyxon-tech/claude-switcher/main/install.ps1))) -Uninstall
+#   Install:    irm https://raw.githubusercontent.com/Xxx00xxX33/claude-switcher/main/install.ps1 | iex
+#   Uninstall:  & ([scriptblock]::Create((irm https://raw.githubusercontent.com/Xxx00xxX33/claude-switcher/main/install.ps1))) -Uninstall
 # Installs for the current user only: no admin rights, nothing outside your user profile.
 # The download is checked against the release's checksums.txt before anything is installed.
 # This file must stay ASCII: Windows PowerShell 5.1 reads scripts without a BOM in the ANSI code page.
@@ -12,7 +12,7 @@ param(
 )
 $ErrorActionPreference = 'Stop'
 $ProgressPreference = 'SilentlyContinue'
-$repo = 'nyxon-tech/claude-switcher'
+$repo = 'Xxx00xxX33/claude-switcher'
 $dir = "$env:LOCALAPPDATA\Programs\claude-switcher"
 $exe = "$dir\claude-switcher.exe"
 $shortcut = "$([Environment]::GetFolderPath('Programs'))\Claude Switcher.lnk"

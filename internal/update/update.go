@@ -17,7 +17,7 @@ import (
 )
 
 // Releases is where the releases live. Tests point it at a local server.
-var Releases = "https://github.com/nyxon-tech/claude-switcher/releases"
+var Releases = "https://github.com/Xxx00xxX33/claude-switcher/releases"
 
 // Latest returns the newest released version, such as "3.0.1". It reads the tag from where the
 // latest-release page redirects to, which needs no API call and has no rate limit.

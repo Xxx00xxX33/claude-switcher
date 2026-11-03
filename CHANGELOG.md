@@ -1,8 +1,9 @@
 # Changelog
 
-## Unreleased
+## 3.1.0
 
 ### Changed
+- **Releases come from [Xxx00xxX33/claude-switcher](https://github.com/Xxx00xxX33/claude-switcher).** `update`, the daily update check and both install scripts download from this fork. Its releases have the sync below and the migrated Windows data folder fix, which the upstream releases do not.
 - **Merge is now sync.** `m` in the Accounts tab and `claude-switcher sync --to <list>` make every other chat list match the one you pick, which is the source of truth. `merge` is gone, with no alias. Merge revived chats you had deleted or archived, because it read neither Desktop's deletion markers nor archived state; sync follows both:
   - A chat the chosen list deleted (`deleted_<session>` marker, for the chat's current or earlier sessions) is deleted from every other list, each record backed up in the journal first. A record the chosen list still holds next to a marker made after the chat was last used, as with chats merge brought back, counts as deleted and goes too. If another copy was used after the deletion, it is a conflict: it is left alone unless you press `d` (delete anyway) or `p` (keep it and pull it back, clearing the marker). The command line always leaves conflicts alone and lists them.
   - Archived state follows the chosen list. Each chat's own record (`isArchived`) decides it; `archived-sessions.idx` is not written, because Desktop rebuilds it from the records when it starts.
