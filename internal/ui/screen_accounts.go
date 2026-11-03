@@ -20,6 +20,9 @@ type accountsScreen struct {
 	follow string // a profile just saved, added or renamed: focus moves to it once it shows
 	top    int    // first card row shown when they do not all fit
 	geo    grid   // where the last View drew the cards, for clicks
+
+	preview *syncPreview // the sync plan waiting for a go, in place of the cards
+	pageH   int          // preview lines the last View showed, for pgup and pgdown
 }
 
 // grid is where the cards landed in the body.
@@ -38,7 +41,7 @@ const (
 	minCardW = 26
 )
 
-type mergePlanMsg struct {
+type syncPlanMsg struct {
 	name string
 	plan ops.Plan
 	err  error
@@ -63,6 +66,9 @@ func (s *accountsScreen) Keys(c *Ctx) []key.Binding {
 	if !c.Loaded {
 		return nil
 	}
+	if s.preview != nil {
+		return s.preview.keys()
+	}
 	if len(s.profiles(c)) == 0 {
 		return []key.Binding{bind("s", "ui.key.save")}
 	}
@@ -73,11 +79,21 @@ func (s *accountsScreen) Keys(c *Ctx) []key.Binding {
 		bind("s", "ui.key.save"),
 		bind("r", "ui.key.rename"),
 		bind("d", "ui.key.remove"),
-		bind("m", "ui.key.merge"),
+		bind("m", "ui.key.sync"),
 	}
 }
 
 func (s *accountsScreen) Update(c *Ctx, msg tea.Msg) tea.Cmd {
+	switch msg.(type) {
+	case tea.KeyPressMsg, tea.MouseClickMsg, tea.MouseWheelMsg:
+		if s.preview != nil { // the preview takes every key, click and wheel turn
+			cmd, done := s.preview.update(c, msg, s.pageH)
+			if done {
+				s.preview = nil
+			}
+			return cmd
+		}
+	}
 	switch msg := msg.(type) {
 	case statusMsg:
 		ps := s.profiles(c)
@@ -88,14 +104,14 @@ func (s *accountsScreen) Update(c *Ctx, msg tea.Msg) tea.Cmd {
 		if i := slices.IndexFunc(ps, func(p ops.Profile) bool { return strings.EqualFold(p.Name, s.follow) }); i >= 0 {
 			s.focus, s.follow = i, ""
 		}
-	case mergePlanMsg:
-		if c.runner != nil || c.dialog != nil { // the user moved on while the plan was worked out
+	case syncPlanMsg:
+		if c.runner != nil || c.dialog != nil || s.preview != nil { // the user moved on while the plan was worked out
 			return nil
 		}
 		if msg.err != nil {
 			return c.Toast(toastFail, msg.err.Error())
 		}
-		return s.confirmMerge(c, msg.name, msg.plan)
+		return s.confirmSync(c, msg.name, msg.plan)
 	case tea.KeyPressMsg:
 		if c.Loaded {
 			return s.key(c, msg.String())
@@ -156,7 +172,7 @@ func (s *accountsScreen) key(c *Ctx, k string) tea.Cmd {
 	case "d":
 		return s.remove(c, p)
 	case "m":
-		return s.merge(c, p)
+		return s.sync(c, p)
 	}
 	return nil
 }
@@ -267,9 +283,9 @@ func (s *accountsScreen) remove(c *Ctx, p ops.Profile) tea.Cmd {
 	return nil
 }
 
-// merge brings every chat into the profile's chat list, asking which one when its account has
+// sync syncs every chat list with the profile's chat list, asking which one when its account has
 // several (one per organization).
-func (s *accountsScreen) merge(c *Ctx, p ops.Profile) tea.Cmd {
+func (s *accountsScreen) sync(c *Ctx, p ops.Profile) tea.Cmd {
 	var lists []ops.List
 	for _, l := range c.Status.Lists {
 		if p.Account != "" && l.Account == p.Account {
@@ -278,48 +294,36 @@ func (s *accountsScreen) merge(c *Ctx, p ops.Profile) tea.Cmd {
 	}
 	switch len(lists) {
 	case 0:
-		c.Alert(i18n.T("ui.merge.title", "name", p.Name), i18n.T("ui.merge.no_list", "name", p.Name))
+		c.Alert(i18n.T("ui.sync.title", "name", p.Name), i18n.T("ui.sync.no_list", "name", p.Name))
 		return nil
 	case 1:
-		return planMerge(c, p.Name, lists[0])
+		return planSync(c, p.Name, lists[0])
 	}
 	labels := make([]string, len(lists))
 	for i, l := range lists {
 		labels[i] = l.Label
 	}
-	c.Choose(i18n.T("ui.merge.pick", "name", p.Name), "", labels, func(i int) tea.Cmd {
-		return planMerge(c, p.Name, lists[i])
+	c.Choose(i18n.T("ui.sync.pick", "name", p.Name), "", labels, func(i int) tea.Cmd {
+		return planSync(c, p.Name, lists[i])
 	})
 	return nil
 }
 
-func planMerge(c *Ctx, name string, to ops.List) tea.Cmd {
+func planSync(c *Ctx, name string, to ops.List) tea.Cmd {
 	env := c.Env
 	return func() tea.Msg {
-		plan, err := env.PlanMerge(to)
-		return mergePlanMsg{name, plan, err}
+		plan, err := env.PlanSync(to)
+		return syncPlanMsg{name, plan, err}
 	}
 }
 
-func (s *accountsScreen) confirmMerge(c *Ctx, name string, plan ops.Plan) tea.Cmd {
-	title := i18n.T("ui.merge.title", "name", name)
-	add, upd := plan.Count(ops.Create), plan.Count(ops.Update)
-	if add+upd == 0 {
-		c.Alert(title, i18n.T("ui.merge.nothing", "name", name))
+// confirmSync opens the preview of a plan, or says there is nothing to sync.
+func (s *accountsScreen) confirmSync(c *Ctx, name string, plan ops.Plan) tea.Cmd {
+	if len(plan.Steps) == 0 {
+		c.Alert(i18n.T("ui.sync.title", "name", name), i18n.T("ui.sync.nothing"))
 		return nil
 	}
-	counts := i18n.T("ui.merge.counts", "new", add, "updated", upd, "newer", plan.Count(ops.SkipNewer))
-	env := c.Env
-	c.Confirm(title, counts+"\n"+i18n.T("ui.merge.body"), i18n.T("action.merge"), false, func() tea.Cmd {
-		return c.Change(change{
-			title: i18n.T("ui.merge.running", "name", name),
-			steps: []string{i18n.T("ui.step.merged", "name", name)},
-			run: func() (string, error) {
-				r, err := env.Apply(plan)
-				return r.Summary, err
-			},
-		})
-	})
+	s.preview = newSyncPreview(name, plan)
 	return nil
 }
 
@@ -349,6 +353,10 @@ func (s *accountsScreen) View(c *Ctx, width, height int) string {
 		return middle(l, st.Muted.Render(l.Fit(i18n.T("state.loading"), width)), width, height)
 	case c.Err != nil && len(c.Status.Profiles) == 0:
 		return middle(l, st.Fail.Render(l.Fit(c.Err.Error(), width)), width, height)
+	}
+	if s.preview != nil {
+		s.pageH = max(1, height-4)
+		return s.preview.view(c, width, height)
 	}
 	ps := s.profiles(c)
 	if len(ps) == 0 {

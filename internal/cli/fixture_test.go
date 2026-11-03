@@ -73,6 +73,17 @@ func (f *fixture) term(mode rtl.Mode, width int, args ...string) result {
 	return result{out.String(), errOut.String(), code}
 }
 
+// answer runs a command as if stdin were a terminal on which the user types input.
+func (f *fixture) answer(input string, args ...string) result {
+	f.t.Helper()
+	var out, errOut bytes.Buffer
+	args = append(args, "--data-dir", f.data, "--vault-dir", f.vault, "--projects-dir", f.projects)
+	a := newApp(Build{Version: "3.0.0", Commit: "abc1234", Date: "2026-09-29T10:00:00Z"}, args, strings.NewReader(input), &out, &errOut)
+	a.ttyIn = true
+	code := a.execute(context.Background(), args)
+	return result{out.String(), errOut.String(), code}
+}
+
 // ok runs a command that must succeed.
 func (f *fixture) ok(args ...string) result {
 	f.t.Helper()

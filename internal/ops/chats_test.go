@@ -1,6 +1,7 @@
 package ops
 
 import (
+	"fmt"
 	"os"
 	"path/filepath"
 	"strings"
@@ -124,28 +125,32 @@ func TestCopyMoveUndo(t *testing.T) {
 	}
 }
 
-// The v2 newest-wins fixture: merge and copy never replace a newer card with an older one.
+// The v2 newest-wins fixture: sync and copy never replace a newer card with an older one.
 func TestNewestWins(t *testing.T) {
 	f, now := chatFixture(t)
-	workDir := f.listDir(work)
+	workDir, persDir := f.listDir(work), f.listDir(pers)
 	workBefore := f.hash(workDir)
 	work, personal := f.list("work"), f.list("personal")
 
 	f.card(pers, "c1", s1, "Design review (older copy)", now-9999999, "")
-	p, err := f.PlanMerge(work)
+	persBefore := f.hash(persDir)
+	p, err := f.PlanSync(work)
 	must(t, err)
-	if len(p.Steps) != 1 || p.Steps[0].Chat.ID != "local_c3" || p.Steps[0].Action != Create {
-		t.Fatalf("merge should only bring what the target lacks: %+v", p.Steps)
+	if len(p.Steps) != 3 || p.Count(Pull) != 1 || p.Count(Update) != 1 || p.Count(Create) != 1 {
+		t.Fatalf("sync should pull c3 into work, then update c1 and create c2 in personal: %+v", p.Steps)
 	}
 	_, err = f.Apply(p)
 	must(t, err)
 	if !f.exists(filepath.Join(workDir, "local_c3.json")) || !strings.Contains(f.read(filepath.Join(workDir, "local_c1.json")), `"Design review"`) {
-		t.Fatal("merge result wrong")
+		t.Fatal("sync should bring what work lacks and keep its newer copy")
+	}
+	if strings.Contains(f.read(filepath.Join(persDir, "local_c1.json")), "older copy") || !f.exists(filepath.Join(persDir, "local_c2.json")) {
+		t.Fatal("sync should push work's newer cards to personal")
 	}
 	_, err = f.Undo()
 	must(t, err)
-	if f.hash(workDir) != workBefore {
-		t.Fatal("undo of a merge should restore the target")
+	if f.hash(workDir) != workBefore || f.hash(persDir) != persBefore {
+		t.Fatal("undo of a sync should restore every list")
 	}
 
 	p, err = f.PlanTransfer(personal, work, []string{"c1"}, false)
@@ -173,34 +178,158 @@ func TestNewestWins(t *testing.T) {
 		t.Fatal("undo should restore the older copy byte for byte")
 	}
 
-	p, err = f.PlanMerge(work)
+	p, err = f.PlanSync(work)
 	must(t, err)
-	if p.Count(Update) != 1 || p.Count(Create) != 1 {
-		t.Fatalf("merge should update older copies too: %+v", p.Steps)
+	if p.Count(Update) != 1 || p.Count(Pull) != 1 || p.Count(Create) != 1 {
+		t.Fatalf("sync should update older copies in A too: %+v", p.Steps)
 	}
 	_, err = f.Apply(p)
 	must(t, err)
 	if !strings.Contains(f.read(filepath.Join(workDir, "local_c1.json")), "continued") || !f.exists(filepath.Join(workDir, "local_c3.json")) {
-		t.Fatal("merge did not update")
+		t.Fatal("sync did not update")
 	}
 	_, err = f.Undo()
 	must(t, err)
 	if f.hash(workDir) != workBefore {
-		t.Fatal("undo of that merge should restore the target")
+		t.Fatal("undo of that sync should restore the target")
 	}
 }
 
-func TestMergeTakesNewestAcrossLists(t *testing.T) {
+// After a sync every list holds the newest copy of every chat found in any list.
+func TestSyncTakesNewestAcrossLists(t *testing.T) {
 	f, now := chatFixture(t)
 	f.card(third, "c9", s3, "old", now-5000, "")
 	f.card(pers, "c9", s3, "newest", now-1000, "")
 	f.card(work, "c9", s3, "oldest", now-9000, "")
-	p, err := f.PlanMerge(f.list("work"))
+	p, err := f.PlanSync(f.list("work"))
 	must(t, err)
-	for _, s := range p.Steps {
-		if s.Chat.ID == "local_c9" && (s.Chat.Title != "newest" || s.Action != Update) {
-			t.Errorf("step = %s %q", s.Action, s.Chat.Title)
+	_, err = f.Apply(p)
+	must(t, err)
+	for _, account := range []string{work, pers, third} {
+		dir := f.listDir(account)
+		for _, id := range []string{"c1", "c2", "c3"} {
+			if !f.exists(filepath.Join(dir, "local_"+id+".json")) {
+				t.Errorf("%s lacks %s after sync", account, id)
+			}
 		}
+		if got := f.read(filepath.Join(dir, "local_c9.json")); !strings.Contains(got, `"newest"`) {
+			t.Errorf("%s holds %s, want the newest copy", account, got)
+		}
+	}
+}
+
+// Sync covers every org list of every account, and one undo restores them all byte for byte.
+func TestSyncCoversEveryOrg(t *testing.T) {
+	f, now := chatFixture(t)
+	org2 := filepath.Join(f.data, "claude-code-sessions", pers, "bbbbbbbb-org2")
+	f.put(filepath.Join(org2, "local_c7.json"), fmt.Sprintf(`{"sessionId":"local_c7","cwd":%s,"title":"Second org","lastActivityAt":%d}`, str(proj), now-1000))
+	sessions := filepath.Join(f.data, "claude-code-sessions")
+	before := f.hash(sessions)
+	p, err := f.PlanSync(f.list("work"))
+	must(t, err)
+	_, err = f.Apply(p)
+	must(t, err)
+	for _, dir := range []string{f.listDir(work), f.listDir(pers), org2} {
+		for _, id := range []string{"c1", "c2", "c3", "c7"} {
+			if !f.exists(filepath.Join(dir, "local_"+id+".json")) {
+				t.Errorf("%s lacks %s after sync", dir, id)
+			}
+		}
+	}
+	if js, _ := f.History(); len(js) != 1 || js[0].Action != Sync {
+		t.Fatalf("one sync should be one journal entry: %+v", js)
+	}
+	_, err = f.Undo()
+	must(t, err)
+	if f.hash(sessions) != before {
+		t.Fatal("one undo should restore every list byte for byte")
+	}
+}
+
+// The caller can leave steps out (the preview's exclude), and a stale plan never writes over a
+// card that became newer after it was worked out.
+func TestSyncAppliesOnlyFreshKeptSteps(t *testing.T) {
+	f, now := chatFixture(t)
+	workDir, persDir := f.listDir(work), f.listDir(pers)
+	p, err := f.PlanSync(f.list("work"))
+	must(t, err)
+	var kept []Step
+	for _, s := range p.Steps {
+		if s.Chat.ID != "local_c2" {
+			kept = append(kept, s)
+		}
+	}
+	p.Steps = kept
+	f.card(work, "c3", s3, "Holiday plan (newer in work now)", now, "")
+	_, err = f.Apply(p)
+	must(t, err)
+	if f.exists(filepath.Join(persDir, "local_c2.json")) {
+		t.Error("an excluded step was written")
+	}
+	if !strings.Contains(f.read(filepath.Join(workDir, "local_c3.json")), "newer in work now") {
+		t.Error("a stale step wrote over a newer card")
+	}
+	if !f.exists(filepath.Join(persDir, "local_c1.json")) {
+		t.Error("a kept step was not written")
+	}
+}
+
+// Leaving a chat out of a sync leaves it out everywhere: its pull into A, its pushes, its
+// archived state and its deletion are all dropped, while the other chats still sync.
+func TestExcludedChatIsWrittenNowhere(t *testing.T) {
+	f, now := chatFixture(t)
+	f.card(third, "c8", s1, "Third's own", now-4000, "")
+	f.card(work, "c9", s2, "Trip", now-1000, `,"isArchived":true`)
+	f.card(pers, "c9", s2, "Trip", now-1000, `,"isArchived":false`)
+	f.card(third, "c9", s2, "Trip", now-1000, `,"isArchived":false`)
+	f.card(pers, "c5", s7, "Gone", now-900000, "")
+	f.card(third, "c5", s7, "Gone", now-900000, "")
+	f.put(filepath.Join(f.listDir(work), "deleted_"+s7), fmt.Sprint(now-1000))
+	p, err := f.PlanSync(f.list("work"))
+	must(t, err)
+	before := map[string]string{}
+	for _, account := range []string{work, pers, third} {
+		for _, id := range []string{"c3", "c5", "c9"} {
+			path := filepath.Join(f.listDir(account), "local_"+id+".json")
+			if f.exists(path) {
+				before[path] = f.read(path)
+			}
+		}
+	}
+	_, err = f.Apply(p.Without("local_c3", "local_c5", "local_c9"))
+	must(t, err)
+	for _, account := range []string{work, pers, third} {
+		for _, id := range []string{"c3", "c5", "c9"} {
+			path := filepath.Join(f.listDir(account), "local_"+id+".json")
+			was, had := before[path]
+			if f.exists(path) != had || had && f.read(path) != was {
+				t.Errorf("%s/%s changed although the chat was left out", account, id)
+			}
+		}
+		if !f.exists(filepath.Join(f.listDir(account), "local_c8.json")) {
+			t.Errorf("%s lacks c8, which was kept", account)
+		}
+	}
+}
+
+// Changes recorded as merge by earlier versions still list and undo.
+func TestOldMergeEntryUndoes(t *testing.T) {
+	f, _ := chatFixture(t)
+	workDir := f.listDir(work)
+	before := f.hash(workDir)
+	j, err := f.Vault.NewJournal("merge", time.Now())
+	must(t, err)
+	card := filepath.Join(workDir, "local_c3.json")
+	must(t, j.Created(card))
+	f.put(card, f.read(filepath.Join(f.listDir(pers), "local_c3.json")))
+	must(t, j.Save("Copied 1 chat into work"))
+	if js, _ := f.History(); len(js) != 1 || js[0].Action != "merge" {
+		t.Fatalf("history = %+v", js)
+	}
+	_, err = f.Undo()
+	must(t, err)
+	if f.hash(workDir) != before {
+		t.Fatal("undo of an old merge should restore the list")
 	}
 }
 
@@ -235,6 +364,14 @@ func TestWritesWaitForDesktopToClose(t *testing.T) {
 		"add":    func() error { return f.Add("third") },
 		"switch": func() error { return f.Switch("personal") },
 		"apply":  func() error { _, err := f.Apply(p); return err },
+		"sync": func() error {
+			p, err := f.PlanSync(f.list("work"))
+			if err != nil {
+				return err
+			}
+			_, err = f.Apply(p)
+			return err
+		},
 		"rescue": func() error { _, err := f.Rescue(f.list("work"), []string{"2000"}); return err },
 		"undo":   func() error { _, err := f.Undo(); return err },
 	}
@@ -255,4 +392,21 @@ func TestUndoWithNothingToUndo(t *testing.T) {
 	f := newFixture(t)
 	_, err := f.Undo()
 	wantCode(t, err, NothingToUndo)
+}
+
+// A sync's done summary counts the cards it wrote, not the plan's: a step the re-check skips is
+// left out of it.
+func TestSyncSummaryCountsWhatWasWritten(t *testing.T) {
+	f, now := chatFixture(t)
+	p, err := f.PlanSync(f.list("work")) // pull c3 into work, push c1 and c2 to personal
+	must(t, err)
+	f.card(work, "c3", s3, "Holiday plan (newer in work now)", now, "")
+	res, err := f.Apply(p)
+	must(t, err)
+	if res.Created != 2 || res.Skipped != 1 {
+		t.Fatalf("result %+v, want the two pushes created and the pull skipped", res)
+	}
+	if want := "Synced every chat list with work: 2 cards written"; res.Summary != want {
+		t.Errorf("summary %q, want %q", res.Summary, want)
+	}
 }

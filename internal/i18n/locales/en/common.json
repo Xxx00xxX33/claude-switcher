@@ -17,7 +17,7 @@
 	"action.remove": "Remove",
 	"action.copy": "Copy",
 	"action.move": "Move",
-	"action.merge": "Merge",
+	"action.sync": "Sync",
 	"action.recover": "Recover",
 	"action.export": "Export",
 	"action.undo": "Undo",

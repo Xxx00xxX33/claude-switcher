@@ -6,6 +6,7 @@ import (
 	"path/filepath"
 	"runtime"
 	"slices"
+	"strconv"
 	"strings"
 	"testing"
 	"time"
@@ -167,29 +168,198 @@ func TestCopyMoveUndo(t *testing.T) {
 	}
 }
 
-func TestMerge(t *testing.T) {
+func TestSync(t *testing.T) {
 	f := chatFixture(t)
-	workDir := f.listDir(work)
-	before := hash(workDir)
+	workDir, persDir := f.listDir(work), f.listDir(pers)
 	f.card(pers, "c1", s1, "Design review (older copy)", time.Now().Add(-100*time.Hour))
-	f.ok("merge", "--to", "work", "--yes")
+	workBefore, persBefore := hash(workDir), hash(persDir)
+	r := f.ok("sync", "--to", "work", "--yes")
+	if !strings.Contains(r.err, i18n.T("cli.plan.sync.counts", "pull", 1, "create", 1, "update", 1, "archive", 0, "unarchive", 0, "delete", 0, "unmark", 0, "conflict", 0, "to", "work")) {
+		t.Errorf("sync prints its counts first:\n%s", r.err)
+	}
 	if !exist(filepath.Join(workDir, "local_c3.json")) || strings.Contains(f.read(filepath.Join(workDir, "local_c1.json")), "older copy") {
-		t.Fatal("merge copies what the target is missing and never an older copy")
+		t.Fatal("sync pulls what the target is missing and never an older copy")
+	}
+	if strings.Contains(f.read(filepath.Join(persDir, "local_c1.json")), "older copy") || !exist(filepath.Join(persDir, "local_c2.json")) {
+		t.Fatal("sync pushes the target's cards to the other lists")
 	}
 	f.ok("undo", "--yes")
-	if hash(workDir) != before {
-		t.Fatal("undo of a merge restores the target")
+	if hash(workDir) != workBefore || hash(persDir) != persBefore {
+		t.Fatal("undo of a sync restores every list")
 	}
-	f.want(f.run("merge"), exitUsage, "merge without --to")
+	f.want(f.run("sync"), exitUsage, "sync without --to")
+	f.want(f.run("merge", "--to", "work"), exitUsage, "merge is gone")
 
 	older := filepath.Join(f.listDir(pers), "local_c1.json")
-	r := f.ok("copy", "--from", "work", "--to", "personal", "c1", "--yes")
+	r = f.ok("copy", "--from", "work", "--to", "personal", "c1", "--yes")
 	if !strings.Contains(r.err, "0 new · 1 updated") || strings.Contains(f.read(older), "older copy") {
 		t.Fatalf("copy brings an older copy in the target up to date:\n%s", r.err)
 	}
 	f.ok("undo", "--yes")
 	if !strings.Contains(f.read(older), "older copy") {
 		t.Error("undo puts the older copy back")
+	}
+}
+
+func TestSyncPreview(t *testing.T) {
+	f := chatFixture(t)
+	f.card(pers, "c1", s1, "Design review (older copy)", time.Now().Add(-100*time.Hour))
+	workDir, persDir := f.listDir(work), f.listDir(pers)
+	workBefore, persBefore := hash(workDir), hash(persDir)
+
+	r := f.run("sync", "--to", "work")
+	f.want(r, exitRefused, "sync without --yes and no terminal to ask on")
+	if hash(workDir) != workBefore || hash(persDir) != persBefore {
+		t.Fatal("sync writes nothing before it is confirmed")
+	}
+	// Each group has a heading, and each line names the chat, its project and the list it changes.
+	for _, want := range []struct{ heading, title, list string }{
+		{"Pull into work (1)", persianTitle, "work"},
+		{"New in other lists (1)", "Release notes", "personal"},
+		{"Update (1)", "Design review", "personal"},
+	} {
+		at := strings.Index(r.err, want.heading)
+		if at < 0 {
+			t.Fatalf("preview lacks group %q:\n%s", want.heading, r.err)
+		}
+		line := strings.SplitN(r.err[at:], "\n", 3)[1]
+		if !strings.Contains(line, want.title) || !strings.Contains(line, "proj") || !strings.Contains(line, want.list) {
+			t.Errorf("group %q line = %q, want title, project and list", want.heading, line)
+		}
+	}
+	for _, empty := range []string{"Delete (", "Archive (", "Unarchive (", "Conflict"} {
+		if strings.Contains(r.err, empty) {
+			t.Errorf("preview shows empty group %q:\n%s", empty, r.err)
+		}
+	}
+}
+
+func TestSyncJSON(t *testing.T) {
+	f := chatFixture(t)
+	f.card(pers, "c1", s1, "Design review (older copy)", time.Now().Add(-100*time.Hour))
+	type stepJSON struct{ Action, ID, Title, Project, List string }
+	out := decode[struct {
+		Kind  string
+		Steps []stepJSON
+	}](t, f.ok("sync", "--to", "work", "--yes", "--json"))
+	got := map[string]string{}
+	for _, s := range out.Steps {
+		if s.Project != "proj" {
+			t.Errorf("step %+v lacks its project", s)
+		}
+		got[s.Action] += s.Title + "@" + s.List + ";"
+	}
+	want := map[string]string{"pull": persianTitle + "@work;", "create": "Release notes@personal;", "update": "Design review@personal;"}
+	if out.Kind != "sync" || !maps.Equal(got, want) {
+		t.Errorf("sync --json steps = %v, want %v", got, want)
+	}
+}
+
+// The counts and the groups count chats, not the lists each one writes: a chat pushed to two
+// lists is one line naming both, and an update that also changes the archived state says so.
+func TestSyncCountsChats(t *testing.T) {
+	f := chatFixture(t)
+	const third = "33333333-3333-4333-8333-333333333333"
+	archived := func(account, id, session, title string, last time.Time) {
+		path := f.card(account, id, session, title, last)
+		f.put(path, strings.TrimSuffix(f.read(path), "}")+`,"isArchived":true}`)
+	}
+	hour := time.Now().Add(-time.Hour)
+	f.card(work, "c1", s1, "Design review", hour) // as new as the archived copies elsewhere
+	archived(pers, "c1", s1, "Design review", hour)
+	archived(third, "c1", s1, "Design review", hour)
+	archived(third, "c3", s3, "Holiday, older", hour)
+	r := f.run("sync", "--to", "work")
+	if !strings.Contains(r.err, i18n.T("cli.plan.sync.counts", "pull", 1, "create", 1, "update", 1, "archive", 0, "unarchive", 1, "delete", 0, "unmark", 0, "conflict", 0, "to", "work")) {
+		t.Errorf("sync counts chats:\n%s", r.err)
+	}
+	for _, want := range []struct{ heading, title, lists, also string }{
+		{"New in other lists (1)", "Release notes", "personal, account 33333333", ""},
+		{"Unarchive (1)", "Design review", "personal, account 33333333", ""},
+		{"Update (1)", persianTitle, "account 33333333", i18n.T("cli.sync.also.unarchive", "list", "account 33333333")},
+	} {
+		at := strings.Index(r.err, want.heading)
+		if at < 0 {
+			t.Fatalf("preview lacks group %q:\n%s", want.heading, r.err)
+		}
+		rest := strings.SplitN(r.err[at:], "\n", 4)
+		line := rest[1]
+		if !strings.Contains(line, want.title) || !strings.Contains(line, want.lists) || strings.Contains(rest[2], want.title) {
+			t.Errorf("group %q line = %q, want one line for %q naming %s", want.heading, line, want.title, want.lists)
+		}
+		if want.also != "" && !strings.Contains(line, want.also) {
+			t.Errorf("group %q line = %q, want it marked %q", want.heading, line, want.also)
+		}
+	}
+	type stepJSON struct{ Action, ID, List, Also string }
+	out := decode[struct{ Steps []stepJSON }](t, f.ok("sync", "--to", "work", "--yes", "--json"))
+	if !slices.Contains(out.Steps, stepJSON{Action: "update", ID: "local_c3", List: "account 33333333", Also: "unarchive"}) {
+		t.Errorf("sync --json marks the update that unarchives: %+v", out.Steps)
+	}
+}
+
+// A list sync writes a chat into loses its own deletion marker for it, shown as its own group and
+// step; undo brings the marker back.
+func TestSyncRemovesMarkersOfChatsItWrites(t *testing.T) {
+	f := chatFixture(t)
+	marker := filepath.Join(f.listDir(pers), "deleted_"+s2)
+	f.put(marker, "1")
+	persBefore := hash(f.listDir(pers))
+	r := f.run("sync", "--to", "work")
+	if !strings.Contains(r.err, i18n.T("cli.plan.sync", "n", 3, "to", "work")) {
+		t.Errorf("the plan counts the cards it writes, not the markers:\n%s", r.err)
+	}
+	if !strings.Contains(r.err, i18n.T("cli.plan.sync.counts", "pull", 1, "create", 2, "update", 0, "archive", 0, "unarchive", 0, "delete", 0, "unmark", 1, "conflict", 0, "to", "work")) {
+		t.Errorf("sync counts the chats whose markers go:\n%s", r.err)
+	}
+	heading := i18n.T("cli.sync.group.unmark", "n", 1, "to", "work")
+	at := strings.Index(r.err, heading)
+	if at < 0 {
+		t.Fatalf("preview lacks group %q:\n%s", heading, r.err)
+	}
+	if line := strings.SplitN(r.err[at:], "\n", 3)[1]; !strings.Contains(line, "Release notes") || !strings.Contains(line, "personal") {
+		t.Errorf("unmark line = %q, want the chat and the list", line)
+	}
+	type stepJSON struct {
+		Action, ID, List string
+		Markers          []string
+	}
+	out := decode[struct {
+		Unmarked int
+		Steps    []stepJSON
+	}](t, f.ok("sync", "--to", "work", "--yes", "--json"))
+	if out.Unmarked != 1 {
+		t.Errorf("sync --json counts the markers removed: %d", out.Unmarked)
+	}
+	if !slices.ContainsFunc(out.Steps, func(s stepJSON) bool {
+		return s.Action == "unmark" && s.ID == "local_c2" && s.List == "personal" && slices.Equal(s.Markers, []string{s2})
+	}) {
+		t.Errorf("sync --json lists the unmark step: %+v", out.Steps)
+	}
+	if exist(marker) {
+		t.Fatal("sync should remove personal's marker for the chat it wrote there")
+	}
+	f.ok("undo", "--yes")
+	if hash(f.listDir(pers)) != persBefore {
+		t.Fatal("undo restores the marker")
+	}
+}
+
+func TestSyncSkipsConflicts(t *testing.T) {
+	f := chatFixture(t)
+	// work deleted c3 two days ago; personal has used it since.
+	f.put(filepath.Join(f.listDir(work), "deleted_"+s3), strconv.FormatInt(time.Now().Add(-48*time.Hour).UnixMilli(), 10))
+	persC3 := filepath.Join(f.listDir(pers), "local_c3.json")
+	before := f.read(persC3)
+	r := f.ok("sync", "--to", "work", "--yes")
+	if at := strings.Index(r.err, "Conflict"); at < 0 || !strings.Contains(r.err[at:], persianTitle) {
+		t.Errorf("preview lists the conflict:\n%s", r.err)
+	}
+	if exist(filepath.Join(f.listDir(work), "local_c3.json")) || f.read(persC3) != before {
+		t.Fatal("sync --yes never applies a conflict")
+	}
+	if !strings.Contains(r.out, "1 conflict left alone") {
+		t.Errorf("sync reports the conflicts it skipped:\n%s", r.out)
 	}
 }
 
@@ -414,5 +584,43 @@ func TestUnattendedWriteRefusesWhileDesktopRuns(t *testing.T) {
 	f.ok("switch", "personal", "--force-quit")
 	if d.forced != 1 {
 		t.Error("--force-quit closes Desktop")
+	}
+}
+
+// An update line says which lists also get the archived change: work's older archived copy is
+// updated as it is, personal's newer unarchived one is updated and archived too.
+func TestSyncPreviewSaysWhichListsAlsoArchive(t *testing.T) {
+	f := chatFixture(t)
+	const third = "33333333-3333-4333-8333-333333333333"
+	archived := f.card(work, "c1", s1, "Design review", time.Now().Add(-3*time.Hour))
+	f.put(archived, strings.TrimSuffix(f.read(archived), "}")+`,"isArchived":true}`)
+	f.card(pers, "c1", s1, "Design review", time.Now().Add(-2*time.Hour))
+	f.card(third, "c1", s1, "Design review", time.Now().Add(-time.Hour))
+	r := f.run("sync", "--to", "work")
+	heading := i18n.T("cli.sync.group.update", "n", 1, "to", "work")
+	at := strings.Index(r.err, heading)
+	if at < 0 {
+		t.Fatalf("preview lacks group %q:\n%s", heading, r.err)
+	}
+	line := strings.SplitN(r.err[at:], "\n", 3)[1]
+	if want := "work, " + i18n.T("cli.sync.also.archive", "list", "personal"); !strings.Contains(line, want) {
+		t.Errorf("update line = %q, want %q", line, want)
+	}
+}
+
+// A plan with only conflicts left never says every list is up to date; it warns about them.
+func TestSyncOnlyConflicts(t *testing.T) {
+	f := chatFixture(t)
+	for _, id := range []string{"c1", "c2"} {
+		card := filepath.Join(f.listDir(work), "local_"+id+".json")
+		f.put(filepath.Join(f.listDir(pers), "local_"+id+".json"), f.read(card))
+	}
+	f.put(filepath.Join(f.listDir(work), "deleted_"+s3), strconv.FormatInt(time.Now().Add(-48*time.Hour).UnixMilli(), 10))
+	r := f.ok("sync", "--to", "work", "--yes")
+	if strings.Contains(r.out+r.err, i18n.T("cli.plan.sync.nothing")) {
+		t.Errorf("a conflicts-only sync says nothing is left to do:\n%s%s", r.err, r.out)
+	}
+	if !strings.Contains(r.out, i18n.T("cli.sync.conflicts", "n", 1)) {
+		t.Errorf("a conflicts-only sync warns about the conflict:\n%s", r.out)
 	}
 }

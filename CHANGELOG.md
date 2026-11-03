@@ -2,6 +2,14 @@
 
 ## Unreleased
 
+### Changed
+- **Merge is now sync.** `m` in the Accounts tab and `claude-switcher sync --to <list>` make every other chat list match the one you pick, which is the source of truth. `merge` is gone, with no alias. Merge revived chats you had deleted or archived, because it read neither Desktop's deletion markers nor archived state; sync follows both:
+  - A chat the chosen list deleted (`deleted_<session>` marker, for the chat's current or earlier sessions) is deleted from every other list, each record backed up in the journal first. A record the chosen list still holds next to a marker made after the chat was last used, as with chats merge brought back, counts as deleted and goes too. If another copy was used after the deletion, it is a conflict: it is left alone unless you press `d` (delete anyway) or `p` (keep it and pull it back, clearing the marker). The command line always leaves conflicts alone and lists them.
+  - Archived state follows the chosen list. Each chat's own record (`isArchived`) decides it; `archived-sessions.idx` is not written, because Desktop rebuilds it from the records when it starts.
+  - Chats the chosen list has never seen are pulled into it first, then pushed out. The newest copy of each chat still wins on content.
+  - Writing a chat into a list removes that list's own deletion markers for it, so Desktop does not hide it again.
+  - The preview groups changes by kind with one line per chat and the accounts it touches. Space leaves out a whole chat. The whole sync is one journal entry, so one undo restores it.
+
 ### Fixed
 - In Windows PowerShell and cmd, every command started by printing `]11;?[c`. The question asking the terminal for its background colour went out before escape sequences were turned on for the console, so it showed as text. They are now turned on first, and the question is not asked when the console cannot take it.
 

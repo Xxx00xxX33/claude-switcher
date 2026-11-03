@@ -23,9 +23,9 @@ func (a *app) chatCommands() []*cobra.Command {
 	chats.Flags().IntVar(&limit, "limit", 0, a.txt(i18n.T("cli.flag.limit")))
 
 	var to string
-	merge := a.forceQuitFlag(a.command("merge --to <list>", "merge", "chats", nargs(0, 0), func(cmd *cobra.Command, _ []string) error {
+	sync := a.forceQuitFlag(a.command("sync --to <list>", "sync", "chats", nargs(0, 0), func(cmd *cobra.Command, _ []string) error {
 		if to == "" {
-			return usageError(errText("cli.err.merge"), cmd)
+			return usageError(errText("cli.err.sync"), cmd)
 		}
 		env, err := a.open()
 		if err != nil {
@@ -35,15 +35,15 @@ func (a *app) chatCommands() []*cobra.Command {
 		if err != nil {
 			return err
 		}
-		plan, err := env.PlanMerge(dst)
+		plan, err := env.PlanSync(dst)
 		if err != nil {
 			return err
 		}
 		return a.apply(cmd.Context(), env, plan)
 	}))
-	merge.Flags().StringVar(&to, "to", "", a.txt(i18n.T("cli.flag.to")))
+	sync.Flags().StringVar(&to, "to", "", a.txt(i18n.T("cli.flag.to")))
 
-	return []*cobra.Command{chats, a.transfer(false), a.transfer(true), merge, a.rescueCommand(), a.exportCommand(),
+	return []*cobra.Command{chats, a.transfer(false), a.transfer(true), sync, a.rescueCommand(), a.exportCommand(),
 		a.forceQuitFlag(a.command("undo", "undo", "chats", nargs(0, 0), a.undo)), a.historyCommand()}
 }
 
@@ -227,42 +227,145 @@ func (a *app) pointer() string { return a.st.accent.Render("›") }
 
 // apply shows a plan, asks, and carries it out once Desktop is closed.
 func (a *app) apply(ctx context.Context, env *ops.Env, p ops.Plan) error {
-	a.say(a.err, a.pointer(), a.st.plain, i18n.T("cli.plan."+p.Kind, "n", len(p.Steps), "from", p.From.Label, "to", p.To.Label))
-	a.note(a.err, i18n.T("cli.plan.counts", "create", p.Count(ops.Create), "update", p.Count(ops.Update), "skip", p.Count(ops.SkipNewer)))
-	// A move still removes the source cards when the target already has newer copies.
-	if p.Count(ops.Create)+p.Count(ops.Update) == 0 && (p.Kind != ops.Move || len(p.Steps) == 0) {
-		return a.changed(p.Kind, p.From.Label, p.To.Label, ops.Result{Summary: i18n.T("cli.plan.nothing", "to", p.To.Label), Skipped: len(p.Steps)}, false)
+	a.say(a.err, a.pointer(), a.st.plain, i18n.T("cli.plan."+p.Kind, "n", p.Cards(), "from", p.From.Label, "to", p.To.Label))
+	if p.Kind == ops.Sync {
+		args := []any{"to", p.To.Label}
+		for _, act := range ops.SyncOrder {
+			args = append(args, string(act), p.Chats(act))
+		}
+		a.note(a.err, i18n.T("cli.plan.sync.counts", args...))
+		a.preview(p)
+	} else {
+		a.note(a.err, i18n.T("cli.plan.counts", "create", p.Count(ops.Create), "update", p.Count(ops.Update), "skip", p.Count(ops.SkipNewer)))
+	}
+	// The command line never decides a conflict: it is reported and left alone.
+	writes := p.Cards()
+	if p.Kind != ops.Move { // a move still removes the source cards when the target has newer copies
+		writes -= p.Count(ops.SkipNewer)
+	}
+	if writes == 0 {
+		if p.Chats(ops.Conflict) > 0 && !a.flags.json {
+			a.leftAlone(p) // only conflicts remain: the warning says it all
+			return nil
+		}
+		if err := a.changed(p.Kind, p.From.Label, p.To.Label, ops.Result{Summary: nothing(p), Skipped: len(p.Steps)}, false, syncSteps(p)...); err != nil {
+			return err
+		}
+		a.leftAlone(p)
+		return nil
 	}
 	if err := a.confirm(ctx, i18n.T("cli.confirm.proceed")); err != nil {
 		return err
 	}
+	w := p
+	w.Steps = slices.DeleteFunc(slices.Clone(p.Steps), func(s ops.Step) bool { return s.Action == ops.Conflict })
 	var res ops.Result
 	err := a.write(ctx, env, false, func() (err error) {
-		res, err = env.Apply(p)
+		res, err = env.Apply(w)
 		return err
 	})
 	if err != nil {
 		return err
 	}
-	return a.changed(p.Kind, p.From.Label, p.To.Label, res, true)
+	if err := a.changed(p.Kind, p.From.Label, p.To.Label, res, true, syncSteps(p)...); err != nil {
+		return err
+	}
+	a.leftAlone(p)
+	return nil
+}
+
+// leftAlone warns about the conflicts a sync left alone, for the app's preview to decide.
+func (a *app) leftAlone(p ops.Plan) {
+	if n := p.Chats(ops.Conflict); n > 0 && !a.flags.json {
+		a.warn(a.out, i18n.T("cli.sync.conflicts", "n", n))
+	}
+}
+
+// preview lists a sync's chats grouped by action: each line names the chat, its project and the
+// lists the action changes, each marked with an archived change an update also makes there.
+func (a *app) preview(p ops.Plan) {
+	width := max(a.width-a.labelWidth()*3-10, 12)
+	groups := p.ByChat()
+	for i, g := range groups {
+		if i == 0 || groups[i-1].Action != g.Action {
+			style := a.st.plain
+			if g.Action == ops.Conflict {
+				style = a.st.warn
+			}
+			a.say(a.err, " ", style, i18n.T("cli.sync.group."+string(g.Action), "n", p.Chats(g.Action), "to", p.To.Label))
+		}
+		title := a.fit(g.Chat.Title, width)
+		if g.Chat.Title == "" {
+			title = a.st.dim.Render(a.txt(i18n.T("cli.chats.untitled")))
+		}
+		lists := make([]string, len(g.Steps))
+		for j, s := range g.Steps {
+			lists[j] = s.List.Label
+			if s.Also != "" {
+				lists[j] = i18n.T("cli.sync.also."+string(s.Also), "list", s.List.Label)
+			}
+		}
+		sep := a.st.muted.Render("·")
+		a.print(a.err, a.line("   ", title, sep, a.st.muted.Render(a.fit(g.Chat.Project, a.labelWidth())),
+			sep, a.st.muted.Render(a.fit(strings.Join(lists, ", "), a.labelWidth()*2))))
+	}
+}
+
+// nothing is the summary of a plan that writes nothing: the conflicts it leaves alone, if any.
+func nothing(p ops.Plan) string {
+	if n := p.Chats(ops.Conflict); n > 0 {
+		return i18n.T("cli.sync.conflicts", "n", n)
+	}
+	if p.Kind == ops.Sync {
+		return i18n.T("cli.plan.sync.nothing")
+	}
+	return i18n.T("cli.plan.nothing", "to", p.To.Label)
 }
 
 type changeJSON struct {
-	Kind    string `json:"kind"`
-	From    string `json:"from,omitempty"`
-	To      string `json:"to"`
-	Summary string `json:"summary"`
-	Created int    `json:"created"`
-	Updated int    `json:"updated"`
-	Skipped int    `json:"skipped"`
-	Removed int    `json:"removed"`
+	Kind     string     `json:"kind"`
+	From     string     `json:"from,omitempty"`
+	To       string     `json:"to"`
+	Summary  string     `json:"summary"`
+	Created  int        `json:"created"`
+	Updated  int        `json:"updated"`
+	Skipped  int        `json:"skipped"`
+	Removed  int        `json:"removed"`
+	Unmarked int        `json:"unmarked,omitempty"`
+	Steps    []stepJSON `json:"steps,omitempty"`
+}
+
+// stepJSON is one step of a sync, conflicts included.
+type stepJSON struct {
+	Action  ops.Action `json:"action"`
+	ID      string     `json:"id"`
+	Title   string     `json:"title"`
+	Project string     `json:"project"`
+	List    string     `json:"list"`
+	Account string     `json:"account"`
+	Org     string     `json:"org"`
+	Also    ops.Action `json:"also,omitempty"`    // an update's archived change on the way
+	Markers []string   `json:"markers,omitempty"` // an unmark's transcript ids, one deleted_ marker each
+}
+
+// syncSteps is every step of a sync plan, for JSON output; other plans give none.
+func syncSteps(p ops.Plan) []stepJSON {
+	if p.Kind != ops.Sync {
+		return nil
+	}
+	out := make([]stepJSON, len(p.Steps))
+	for i, s := range p.Steps {
+		out[i] = stepJSON{Action: s.Action, ID: s.Chat.ID, Title: s.Chat.Title, Project: s.Chat.Project,
+			List: s.List.Label, Account: s.List.Account, Org: s.List.Org, Also: s.Also, Markers: s.Markers}
+	}
+	return out
 }
 
 // changed reports a finished change; wrote says whether it wrote anything undo can take back.
-func (a *app) changed(kind, from, to string, res ops.Result, wrote bool) error {
+func (a *app) changed(kind, from, to string, res ops.Result, wrote bool, steps ...stepJSON) error {
 	if a.flags.json {
 		return a.json(changeJSON{Kind: kind, From: from, To: to, Summary: res.Summary,
-			Created: res.Created, Updated: res.Updated, Skipped: res.Skipped, Removed: res.Removed})
+			Created: res.Created, Updated: res.Updated, Skipped: res.Skipped, Removed: res.Removed, Unmarked: res.Unmarked, Steps: steps})
 	}
 	a.done(a.out, res.Summary)
 	if wrote {

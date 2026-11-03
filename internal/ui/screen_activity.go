@@ -34,8 +34,8 @@ type historyMsg struct {
 // listTop is the blank line between the divider and the first row.
 const listTop = 1
 
-// actionIcons mark each kind of change.
-var actionIcons = map[string]string{ops.Copy: "+", ops.Move: "→", ops.Merge: "»", ops.Rescue: "↑"}
+// actionIcons mark each kind of change. "merge" is kept for changes recorded by earlier versions.
+var actionIcons = map[string]string{ops.Copy: "+", ops.Move: "→", ops.Sync: "⇄", "merge": "»", ops.Rescue: "↑"}
 
 func (*activityScreen) Title() string { return i18n.T("tab.activity") }
 func (*activityScreen) Typing() bool  { return false }
