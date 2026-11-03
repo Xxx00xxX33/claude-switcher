@@ -18,6 +18,7 @@ var syncHeadings = map[ops.Action]string{
 	ops.Delete:    "ui.sync.group.delete",
 	ops.Archive:   "ui.sync.group.archive",
 	ops.Unarchive: "ui.sync.group.unarchive",
+	ops.Unmark:    "ui.sync.group.unmark",
 	ops.Conflict:  "ui.sync.group.conflict",
 }
 

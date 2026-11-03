@@ -36,9 +36,7 @@ func (e *Env) Resolve(p Plan, choices map[string]Choice) (Plan, error) {
 				if i == 0 {
 					missing = Pull
 				}
-				if st, ok := push(s.Chat, s.Chat.Archived, h, missing); ok {
-					out.Steps = append(out.Steps, st)
-				}
+				out.Steps = append(out.Steps, writes(s.Chat, s.Chat.Archived, h, missing)...)
 			}
 		default:
 			out.Steps = append(out.Steps, s)

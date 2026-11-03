@@ -227,15 +227,15 @@ func (a *app) pointer() string { return a.st.accent.Render("›") }
 
 // apply shows a plan, asks, and carries it out once Desktop is closed.
 func (a *app) apply(ctx context.Context, env *ops.Env, p ops.Plan) error {
-	a.say(a.err, a.pointer(), a.st.plain, i18n.T("cli.plan."+p.Kind, "n", len(p.Steps)-p.Count(ops.Conflict), "from", p.From.Label, "to", p.To.Label))
+	a.say(a.err, a.pointer(), a.st.plain, i18n.T("cli.plan."+p.Kind, "n", p.Cards(), "from", p.From.Label, "to", p.To.Label))
 	if p.Kind == ops.Sync {
-		a.note(a.err, i18n.T("cli.plan.sync.counts", "pull", p.Chats(ops.Pull), "create", p.Chats(ops.Create), "update", p.Chats(ops.Update), "archive", p.Chats(ops.Archive), "unarchive", p.Chats(ops.Unarchive), "delete", p.Chats(ops.Delete), "conflict", p.Chats(ops.Conflict), "to", p.To.Label))
+		a.note(a.err, i18n.T("cli.plan.sync.counts", "pull", p.Chats(ops.Pull), "create", p.Chats(ops.Create), "update", p.Chats(ops.Update), "archive", p.Chats(ops.Archive), "unarchive", p.Chats(ops.Unarchive), "delete", p.Chats(ops.Delete), "unmark", p.Chats(ops.Unmark), "conflict", p.Chats(ops.Conflict), "to", p.To.Label))
 		a.preview(p)
 	} else {
 		a.note(a.err, i18n.T("cli.plan.counts", "create", p.Count(ops.Create), "update", p.Count(ops.Update), "skip", p.Count(ops.SkipNewer)))
 	}
 	// The command line never decides a conflict: it is reported and left alone.
-	writes := len(p.Steps) - p.Count(ops.Conflict)
+	writes := p.Cards()
 	if p.Kind != ops.Move { // a move still removes the source cards when the target has newer copies
 		writes -= p.Count(ops.SkipNewer)
 	}
@@ -313,15 +313,16 @@ func nothing(p ops.Plan) string {
 }
 
 type changeJSON struct {
-	Kind    string     `json:"kind"`
-	From    string     `json:"from,omitempty"`
-	To      string     `json:"to"`
-	Summary string     `json:"summary"`
-	Created int        `json:"created"`
-	Updated int        `json:"updated"`
-	Skipped int        `json:"skipped"`
-	Removed int        `json:"removed"`
-	Steps   []stepJSON `json:"steps,omitempty"`
+	Kind     string     `json:"kind"`
+	From     string     `json:"from,omitempty"`
+	To       string     `json:"to"`
+	Summary  string     `json:"summary"`
+	Created  int        `json:"created"`
+	Updated  int        `json:"updated"`
+	Skipped  int        `json:"skipped"`
+	Removed  int        `json:"removed"`
+	Unmarked int        `json:"unmarked,omitempty"`
+	Steps    []stepJSON `json:"steps,omitempty"`
 }
 
 // stepJSON is one step of a sync, conflicts included.
@@ -333,7 +334,8 @@ type stepJSON struct {
 	List    string     `json:"list"`
 	Account string     `json:"account"`
 	Org     string     `json:"org"`
-	Also    ops.Action `json:"also,omitempty"` // an update's archived change on the way
+	Also    ops.Action `json:"also,omitempty"`    // an update's archived change on the way
+	Markers []string   `json:"markers,omitempty"` // an unmark's transcript ids, one deleted_ marker each
 }
 
 // syncSteps is every step of a sync plan, for JSON output; other plans give none.
@@ -344,7 +346,7 @@ func syncSteps(p ops.Plan) []stepJSON {
 	out := make([]stepJSON, len(p.Steps))
 	for i, s := range p.Steps {
 		out[i] = stepJSON{Action: s.Action, ID: s.Chat.ID, Title: s.Chat.Title, Project: s.Chat.Project,
-			List: s.List.Label, Account: s.List.Account, Org: s.List.Org, Also: s.Also}
+			List: s.List.Label, Account: s.List.Account, Org: s.List.Org, Also: s.Also, Markers: s.Markers}
 	}
 	return out
 }
@@ -353,7 +355,7 @@ func syncSteps(p ops.Plan) []stepJSON {
 func (a *app) changed(kind, from, to string, res ops.Result, wrote bool, steps ...stepJSON) error {
 	if a.flags.json {
 		return a.json(changeJSON{Kind: kind, From: from, To: to, Summary: res.Summary,
-			Created: res.Created, Updated: res.Updated, Skipped: res.Skipped, Removed: res.Removed, Steps: steps})
+			Created: res.Created, Updated: res.Updated, Skipped: res.Skipped, Removed: res.Removed, Unmarked: res.Unmarked, Steps: steps})
 	}
 	a.done(a.out, res.Summary)
 	if wrote {

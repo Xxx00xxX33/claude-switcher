@@ -38,10 +38,11 @@ const (
 	Unarchive Action = "unarchive"  // sync: the list's copy gets unarchived because A's is not; its content is the newest already
 	Delete    Action = "delete"     // sync: the chat was deleted in A; this card is backed up and removed
 	Conflict  Action = "conflict"   // sync: deleted in A but used elsewhere since; left alone
+	Unmark    Action = "unmark"     // sync: the list's own deletion markers for a chat written into it are backed up and removed
 )
 
 // SyncOrder is the order a sync preview groups its steps in, one group per action.
-var SyncOrder = []Action{Pull, Create, Update, Delete, Archive, Unarchive, Conflict}
+var SyncOrder = []Action{Pull, Create, Update, Delete, Archive, Unarchive, Unmark, Conflict}
 
 // Step is one chat of a plan.
 type Step struct {
@@ -55,6 +56,9 @@ type Step struct {
 	// Also is the archived change an Update makes on the way, Archive or Unarchive; empty when
 	// the list's copy already has the archived state written.
 	Also Action
+	// Markers are the transcript ids of the list's own deletion markers an Unmark removes: the
+	// chat's current and prior ones. Its Target is the chat's card in List.
+	Markers []string
 }
 
 // Plan is a change worked out before anything is written, for the caller to show and confirm.
@@ -75,6 +79,10 @@ func (p Plan) Count(a Action) int {
 	}
 	return n
 }
+
+// Cards is how many steps write or delete a card: every step but conflicts, left alone, and
+// unmarks, which go with a card write.
+func (p Plan) Cards() int { return len(p.Steps) - p.Count(Conflict) - p.Count(Unmark) }
 
 // Chats is how many chats have a step taking action a, however many lists those steps write.
 func (p Plan) Chats(a Action) int {
@@ -124,11 +132,12 @@ func (p Plan) Without(ids ...string) Plan {
 
 // Result is what a change did.
 type Result struct {
-	Summary string
-	Created int
-	Updated int
-	Skipped int // the target already had the chat as new or newer
-	Removed int // source cards removed by a move, or cards a sync deleted
+	Summary  string
+	Created  int
+	Updated  int
+	Skipped  int // the target already had the chat as new or newer
+	Removed  int // source cards removed by a move, or cards a sync deleted
+	Unmarked int // deletion markers a sync removed from lists it wrote the chat into
 }
 
 // PlanTransfer plans copying (or moving) chats from one list to another. ids are chat
@@ -211,19 +220,18 @@ func (e *Env) PlanSync(to List) (Plan, error) {
 			if i == 0 {
 				missing = Pull
 			}
-			if s, ok := push(c, archived, h, missing); ok {
-				p.Steps = append(p.Steps, s)
-			}
+			p.Steps = append(p.Steps, writes(c, archived, h, missing)...)
 		}
 	}
 	p.Steps = append(p.Steps, gone...)
 	return p, nil
 }
 
-// holding is one chat list and its chats by id.
+// holding is one chat list, its chats by id and the transcript ids its deletion markers name.
 type holding struct {
 	list  List
 	chats map[string]Chat
+	marks map[string]bool
 }
 
 // holdings reads every chat list's chats, to's first.
@@ -248,12 +256,39 @@ func (e *Env) holdings(to List) ([]holding, error) {
 		if err != nil {
 			return nil, err
 		}
-		all[i] = holding{list: l, chats: map[string]Chat{}}
+		marks, err := l.Tombstones()
+		if err != nil {
+			return nil, err
+		}
+		all[i] = holding{list: l, chats: map[string]Chat{}, marks: map[string]bool{}}
 		for _, c := range chats {
 			all[i].chats[c.ID] = c
 		}
+		for _, id := range marks {
+			all[i].marks[id] = true
+		}
 	}
 	return all, nil
+}
+
+// writes are the steps that write c into h's list: push's, then an Unmark when the list holds its
+// own deletion markers for the chat, so it never holds both a card and a marker.
+func writes(c Chat, archived bool, h holding, missing Action) []Step {
+	s, ok := push(c, archived, h, missing)
+	if !ok {
+		return nil
+	}
+	out := []Step{s}
+	var ids []string
+	for _, id := range append([]string{c.Session}, c.Prior...) {
+		if id != "" && h.marks[id] && !slices.Contains(ids, id) {
+			ids = append(ids, id)
+		}
+	}
+	if len(ids) > 0 {
+		out = append(out, Step{Action: Unmark, Chat: c, List: h.list, Target: s.Target, Markers: ids})
+	}
+	return out
 }
 
 // push is the step that writes c, with the archived state given, into h's list: missing when the
@@ -426,6 +461,8 @@ func apply(j *store.Journal, s Step, write freshFunc, move bool, res *Result) er
 		return nil
 	case Delete:
 		return removeCard(j, s, res)
+	case Unmark:
+		return unmark(j, s, res)
 	}
 	data, err := os.ReadFile(s.Chat.Path)
 	if err != nil {
@@ -476,6 +513,29 @@ func removeCard(j *store.Journal, s Step, res *Result) error {
 	return nil
 }
 
+// unmark backs up and removes the list's markers a step names, those still there, once the list
+// holds the chat's card.
+func unmark(j *store.Journal, s Step, res *Result) error {
+	if _, err := os.Lstat(s.Target); err != nil {
+		res.Skipped++
+		return nil
+	}
+	for _, id := range s.Markers {
+		path := filepath.Join(s.List.Dir, "deleted_"+id)
+		if _, err := os.Lstat(path); err != nil {
+			continue
+		}
+		if err := j.Removed(path); err != nil {
+			return err
+		}
+		if err := os.Remove(path); err != nil {
+			return err
+		}
+		res.Unmarked++
+	}
+	return nil
+}
+
 // writeCard puts a card's bytes at target as action a says, journaling first. The bytes are copied
 // as they are, so every field survives.
 func writeCard(j *store.Journal, target string, data []byte, a Action, res *Result) error {
@@ -504,7 +564,7 @@ func writeCard(j *store.Journal, target string, data []byte, a Action, res *Resu
 }
 
 func summary(p Plan) string {
-	n := len(p.Steps) - p.Count(Conflict)
+	n := p.Cards()
 	switch p.Kind {
 	case Sync:
 		return i18n.T("ops.done.sync", "n", n, "to", p.To.Label)

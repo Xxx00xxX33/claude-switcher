@@ -174,7 +174,7 @@ func TestSync(t *testing.T) {
 	f.card(pers, "c1", s1, "Design review (older copy)", time.Now().Add(-100*time.Hour))
 	workBefore, persBefore := hash(workDir), hash(persDir)
 	r := f.ok("sync", "--to", "work", "--yes")
-	if !strings.Contains(r.err, i18n.T("cli.plan.sync.counts", "pull", 1, "create", 1, "update", 1, "archive", 0, "unarchive", 0, "delete", 0, "conflict", 0, "to", "work")) {
+	if !strings.Contains(r.err, i18n.T("cli.plan.sync.counts", "pull", 1, "create", 1, "update", 1, "archive", 0, "unarchive", 0, "delete", 0, "unmark", 0, "conflict", 0, "to", "work")) {
 		t.Errorf("sync prints its counts first:\n%s", r.err)
 	}
 	if !exist(filepath.Join(workDir, "local_c3.json")) || strings.Contains(f.read(filepath.Join(workDir, "local_c1.json")), "older copy") {
@@ -270,7 +270,7 @@ func TestSyncCountsChats(t *testing.T) {
 	archived(third, "c1", s1, "Design review", hour)
 	archived(third, "c3", s3, "Holiday, older", hour)
 	r := f.run("sync", "--to", "work")
-	if !strings.Contains(r.err, i18n.T("cli.plan.sync.counts", "pull", 1, "create", 1, "update", 1, "archive", 0, "unarchive", 1, "delete", 0, "conflict", 0, "to", "work")) {
+	if !strings.Contains(r.err, i18n.T("cli.plan.sync.counts", "pull", 1, "create", 1, "update", 1, "archive", 0, "unarchive", 1, "delete", 0, "unmark", 0, "conflict", 0, "to", "work")) {
 		t.Errorf("sync counts chats:\n%s", r.err)
 	}
 	for _, want := range []struct{ heading, title, lists, also string }{
@@ -295,6 +295,53 @@ func TestSyncCountsChats(t *testing.T) {
 	out := decode[struct{ Steps []stepJSON }](t, f.ok("sync", "--to", "work", "--yes", "--json"))
 	if !slices.Contains(out.Steps, stepJSON{Action: "update", ID: "local_c3", List: "account 33333333", Also: "unarchive"}) {
 		t.Errorf("sync --json marks the update that unarchives: %+v", out.Steps)
+	}
+}
+
+// A list sync writes a chat into loses its own deletion marker for it, shown as its own group and
+// step; undo brings the marker back.
+func TestSyncRemovesMarkersOfChatsItWrites(t *testing.T) {
+	f := chatFixture(t)
+	marker := filepath.Join(f.listDir(pers), "deleted_"+s2)
+	f.put(marker, "1")
+	persBefore := hash(f.listDir(pers))
+	r := f.run("sync", "--to", "work")
+	if !strings.Contains(r.err, i18n.T("cli.plan.sync", "n", 3, "to", "work")) {
+		t.Errorf("the plan counts the cards it writes, not the markers:\n%s", r.err)
+	}
+	if !strings.Contains(r.err, i18n.T("cli.plan.sync.counts", "pull", 1, "create", 2, "update", 0, "archive", 0, "unarchive", 0, "delete", 0, "unmark", 1, "conflict", 0, "to", "work")) {
+		t.Errorf("sync counts the chats whose markers go:\n%s", r.err)
+	}
+	heading := i18n.T("cli.sync.group.unmark", "n", 1, "to", "work")
+	at := strings.Index(r.err, heading)
+	if at < 0 {
+		t.Fatalf("preview lacks group %q:\n%s", heading, r.err)
+	}
+	if line := strings.SplitN(r.err[at:], "\n", 3)[1]; !strings.Contains(line, "Release notes") || !strings.Contains(line, "personal") {
+		t.Errorf("unmark line = %q, want the chat and the list", line)
+	}
+	type stepJSON struct {
+		Action, ID, List string
+		Markers          []string
+	}
+	out := decode[struct {
+		Unmarked int
+		Steps    []stepJSON
+	}](t, f.ok("sync", "--to", "work", "--yes", "--json"))
+	if out.Unmarked != 1 {
+		t.Errorf("sync --json counts the markers removed: %d", out.Unmarked)
+	}
+	if !slices.ContainsFunc(out.Steps, func(s stepJSON) bool {
+		return s.Action == "unmark" && s.ID == "local_c2" && s.List == "personal" && slices.Equal(s.Markers, []string{s2})
+	}) {
+		t.Errorf("sync --json lists the unmark step: %+v", out.Steps)
+	}
+	if exist(marker) {
+		t.Fatal("sync should remove personal's marker for the chat it wrote there")
+	}
+	f.ok("undo", "--yes")
+	if hash(f.listDir(pers)) != persBefore {
+		t.Fatal("undo restores the marker")
 	}
 }
 

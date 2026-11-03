@@ -158,11 +158,28 @@ func TestSyncConflictKeep(t *testing.T) {
 	wantIn(t, a, i18n.T("ui.sync.conflict.keep", "name", "work"))
 	press(a, "enter")
 	a.Update(a.runner.try()())
-	if n := cardsIn(t, env, workID); n != 6 {
-		t.Errorf("work holds %d cards, want its 3, personal's 2 and the marker", n)
+	if n := cardsIn(t, env, workID); n != 5 {
+		t.Errorf("work holds %d cards, want its 3 and personal's 2, its marker for Trip plan gone", n)
 	}
 	if n := cardsIn(t, env, personID); n != 5 {
 		t.Errorf("personal holds %d cards, want 5", n)
+	}
+}
+
+// An account a chat is written into loses its own deletion marker for it, shown in its own group;
+// the marker goes with the sync.
+func TestSyncPreviewShowsUnmark(t *testing.T) {
+	env, _ := fixture(t)
+	notes := workID[:8] + "-0002-4000-8000-000000000000" // Release notes, created in personal
+	marker := filepath.Join(env.Install.DataDir, "claude-code-sessions", personID, orgID, "deleted_"+notes)
+	put(t, marker, "1")
+	a := newTestApp(t, env, 100, 30)
+	openPreview(t, a)
+	wantIn(t, a, i18n.T("ui.sync.group.unmark", "name", "work", "n", 1))
+	press(a, "enter")
+	a.Update(a.runner.try()())
+	if _, err := os.Stat(marker); err == nil {
+		t.Error("personal still holds its marker for Release notes, written there")
 	}
 }
 

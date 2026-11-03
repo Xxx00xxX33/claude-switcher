@@ -40,6 +40,7 @@
 	"ui.sync.group.delete": "Deleted, as in “{name}” ({n})",
 	"ui.sync.group.archive": "Archived, as in “{name}” ({n})",
 	"ui.sync.group.unarchive": "Unarchived, as in “{name}” ({n})",
+	"ui.sync.group.unmark": "Deletion markers removed where the chat is written ({n})",
 	"ui.sync.group.conflict": "Deleted in “{name}” but used since ({n})",
 	"ui.sync.kept": "{n} of {total} chats kept",
 	"ui.sync.also.archive": "also archived",
