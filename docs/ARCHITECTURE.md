@@ -52,7 +52,8 @@ Never touched: `Local State` (holds the cookie encryption key), `claude_desktop_
    older one; a sync also writes a card just as new when only its archived state differs from
    the list synced from. Sync deletes a chat's cards from every other list when the list synced
    from has a `deleted_` marker for one of its transcripts (unless a copy was used after the
-   marker), backing each card up in the journal first.
+   marker), backing each card up in the journal first, and removes a list's own `deleted_` markers
+   for the chats it writes there, journaled the same way.
 4. **A chat is several transcripts.** A card's `cliSessionId` is the current part and
    `priorCliSessionIds` lists older parts. Rescue never offers an older part, a tombstoned chat, or
    a chat another card already titles in the same project.

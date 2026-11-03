@@ -86,7 +86,7 @@ func TestSyncPreviewExcludesWholeChat(t *testing.T) {
 	a := newTestApp(t, env, 120, 40)
 	openPreview(t, a)
 	wantIn(t, a, i18n.T("ui.sync.group.pull", "name", "work", "n", 3), i18n.T("ui.sync.group.create", "name", "work", "n", 6),
-		i18n.T("ui.sync.group.update", "name", "work", "n", 1), i18n.T("ui.sync.also.unarchive"), "client, personal",
+		i18n.T("ui.sync.group.update", "name", "work", "n", 1), i18n.T("ui.sync.also.unarchive", "list", "client"), "client, personal",
 		i18n.T("ui.sync.kept", "n", 6, "total", 6))
 	chatKeys(a, "space") // the first line: Trip plan, pulled into work, then pushed to client
 	wantIn(t, a, i18n.T("ui.sync.kept", "n", 5, "total", 6))
@@ -107,6 +107,24 @@ func TestSyncPreviewExcludesWholeChat(t *testing.T) {
 	if _, err := os.Stat(trip); err == nil {
 		t.Error("Trip plan was pushed to client although it was left out")
 	}
+}
+
+// An update line marks each list that also gets the archived change: work's older archived copy
+// is updated as it is, personal's newer unarchived one is updated and archived too.
+func TestSyncPreviewSaysWhichListsAlsoArchive(t *testing.T) {
+	env, _ := fixture(t)
+	fix := workID[:8] + "-0000-4000-8000-000000000000"
+	card := func(account string, age time.Duration, extra string) {
+		put(t, filepath.Join(env.Install.DataDir, "claude-code-sessions", account, orgID, "local_"+fix+".json"),
+			fmt.Sprintf(`{"sessionId":"local_%s","cliSessionId":"%s","cwd":"/work/proj","title":"Fix the login redirect","lastActivityAt":%d%s}`,
+				fix, fix, now.Add(-age).UnixMilli(), extra))
+	}
+	card(workID, 3*time.Hour, `,"isArchived":true`)
+	card(personID, 2*time.Hour, "")
+	card(clientID, time.Hour, "")
+	a := newTestApp(t, env, 160, 40)
+	openPreview(t, a)
+	wantIn(t, a, i18n.T("ui.sync.group.update", "name", "work", "n", 1), "work, "+i18n.T("ui.sync.also.archive", "list", "personal"))
 }
 
 // conflictFixture is fixture with Trip plan (personal) deleted in work before it was last used.
@@ -149,13 +167,14 @@ func TestSyncConflictDeleteAnyway(t *testing.T) {
 	}
 }
 
-// p keeps a conflicted chat and pulls it into the account synced from.
+// p keeps a conflicted chat and pulls it into the account synced from, which loses its deletion
+// marker for it; the line says both.
 func TestSyncConflictKeep(t *testing.T) {
 	env := conflictFixture(t)
 	a := newTestApp(t, env, 100, 30)
 	openPreview(t, a)
 	press(a, "enter", "p")
-	wantIn(t, a, i18n.T("ui.sync.conflict.keep", "name", "work"))
+	wantIn(t, a, i18n.T("ui.sync.conflict.keep", "name", "work"), "deletion marker")
 	press(a, "enter")
 	a.Update(a.runner.try()())
 	if n := cardsIn(t, env, workID); n != 5 {

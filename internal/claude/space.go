@@ -74,14 +74,20 @@ func (s Space) Cards() ([]*Card, error) {
 	return cards, nil
 }
 
-// Tombstones are the transcript ids of chats deleted in the app (files named deleted_<id>).
+// markerPrefix starts the name of a deletion marker: deleted_<transcript id>.
+const markerPrefix = "deleted_"
+
+// Tombstones are the transcript ids of chats deleted in the app, one deletion marker each.
 func (s Space) Tombstones() ([]string, error) {
-	names, err := s.files("deleted_")
+	names, err := s.files(markerPrefix)
 	for i, name := range names {
-		names[i] = strings.TrimPrefix(name, "deleted_")
+		names[i] = strings.TrimPrefix(name, markerPrefix)
 	}
 	return names, err
 }
+
+// Marker is the path of the list's deletion marker for transcript id, there or not.
+func (s Space) Marker(id string) string { return filepath.Join(s.Dir, markerPrefix+id) }
 
 func (s Space) files(prefix string) ([]string, error) {
 	entries, err := os.ReadDir(s.Dir)

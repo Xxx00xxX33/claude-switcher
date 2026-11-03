@@ -135,9 +135,11 @@ type Result struct {
 	Summary  string
 	Created  int
 	Updated  int
-	Skipped  int // the target already had the chat as new or newer
 	Removed  int // source cards removed by a move, or cards a sync deleted
 	Unmarked int // deletion markers a sync removed from lists it wrote the chat into
+	// Skipped is steps the re-check left alone: the target already had the chat as new or newer,
+	// a card a sync deletes was used since, or the card an unmark goes with is gone.
+	Skipped int
 }
 
 // PlanTransfer plans copying (or moving) chats from one list to another. ids are chat
@@ -189,16 +191,12 @@ func (e *Env) PlanSync(to List) (Plan, error) {
 			}
 		}
 	}
-	marks, err := markers(to)
-	if err != nil {
-		return Plan{}, err
-	}
 	var gone []Step
 	for _, c := range slices.SortedFunc(maps.Values(newest), newestFirst) {
 		if _, kept := all[0].chats[c.ID]; kept {
 			continue
 		}
-		when, ok := markedAt(copies[c.ID], marks)
+		when, ok := markedAt(copies[c.ID], all[0].marks)
 		if !ok {
 			continue // never in A, or lost from it without a marker: pulled in below
 		}
@@ -227,11 +225,12 @@ func (e *Env) PlanSync(to List) (Plan, error) {
 	return p, nil
 }
 
-// holding is one chat list, its chats by id and the transcript ids its deletion markers name.
+// holding is one chat list, its chats by id and when each transcript its deletion markers name
+// was deleted.
 type holding struct {
 	list  List
 	chats map[string]Chat
-	marks map[string]bool
+	marks map[string]time.Time
 }
 
 // holdings reads every chat list's chats, to's first.
@@ -256,16 +255,13 @@ func (e *Env) holdings(to List) ([]holding, error) {
 		if err != nil {
 			return nil, err
 		}
-		marks, err := l.Tombstones()
+		marks, err := markers(l)
 		if err != nil {
 			return nil, err
 		}
-		all[i] = holding{list: l, chats: map[string]Chat{}, marks: map[string]bool{}}
+		all[i] = holding{list: l, chats: map[string]Chat{}, marks: marks}
 		for _, c := range chats {
 			all[i].chats[c.ID] = c
-		}
-		for _, id := range marks {
-			all[i].marks[id] = true
 		}
 	}
 	return all, nil
@@ -281,7 +277,7 @@ func writes(c Chat, archived bool, h holding, missing Action) []Step {
 	out := []Step{s}
 	var ids []string
 	for _, id := range append([]string{c.Session}, c.Prior...) {
-		if id != "" && h.marks[id] && !slices.Contains(ids, id) {
+		if _, marked := h.marks[id]; id != "" && marked && !slices.Contains(ids, id) {
 			ids = append(ids, id)
 		}
 	}
@@ -339,7 +335,7 @@ func markers(l List) (map[string]time.Time, error) {
 	}
 	out := make(map[string]time.Time, len(ids))
 	for _, id := range ids {
-		path := filepath.Join(l.Dir, "deleted_"+id)
+		path := l.Marker(id)
 		data, err := os.ReadFile(path)
 		if err != nil {
 			return nil, err
@@ -446,7 +442,7 @@ func (e *Env) Apply(p Plan) (Result, error) {
 			break
 		}
 	}
-	res.Summary = summary(p)
+	res.Summary = summary(p, res)
 	if serr := j.Save(res.Summary); err == nil {
 		err = serr
 	}
@@ -521,7 +517,7 @@ func unmark(j *store.Journal, s Step, res *Result) error {
 		return nil
 	}
 	for _, id := range s.Markers {
-		path := filepath.Join(s.List.Dir, "deleted_"+id)
+		path := s.List.Marker(id)
 		if _, err := os.Lstat(path); err != nil {
 			continue
 		}
@@ -563,11 +559,13 @@ func writeCard(j *store.Journal, target string, data []byte, a Action, res *Resu
 	return nil
 }
 
-func summary(p Plan) string {
+// summary says what a change did: a sync counts the cards it wrote or deleted, steps the re-check
+// skipped left out; a copy or move counts the plan's steps.
+func summary(p Plan, res Result) string {
 	n := p.Cards()
 	switch p.Kind {
 	case Sync:
-		return i18n.T("ops.done.sync", "n", n, "to", p.To.Label)
+		return i18n.T("ops.done.sync", "n", res.Created+res.Updated+res.Removed, "to", p.To.Label)
 	case Move:
 		return i18n.T("ops.done.move", "n", n, "from", p.From.Label, "to", p.To.Label)
 	}

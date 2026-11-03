@@ -393,3 +393,20 @@ func TestUndoWithNothingToUndo(t *testing.T) {
 	_, err := f.Undo()
 	wantCode(t, err, NothingToUndo)
 }
+
+// A sync's done summary counts the cards it wrote, not the plan's: a step the re-check skips is
+// left out of it.
+func TestSyncSummaryCountsWhatWasWritten(t *testing.T) {
+	f, now := chatFixture(t)
+	p, err := f.PlanSync(f.list("work")) // pull c3 into work, push c1 and c2 to personal
+	must(t, err)
+	f.card(work, "c3", s3, "Holiday plan (newer in work now)", now, "")
+	res, err := f.Apply(p)
+	must(t, err)
+	if res.Created != 2 || res.Skipped != 1 {
+		t.Fatalf("result %+v, want the two pushes created and the pull skipped", res)
+	}
+	if want := "Synced every chat list with work: 2 cards written"; res.Summary != want {
+		t.Errorf("summary %q, want %q", res.Summary, want)
+	}
+}

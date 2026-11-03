@@ -276,7 +276,7 @@ func TestSyncCountsChats(t *testing.T) {
 	for _, want := range []struct{ heading, title, lists, also string }{
 		{"New in other lists (1)", "Release notes", "personal, account 33333333", ""},
 		{"Unarchive (1)", "Design review", "personal, account 33333333", ""},
-		{"Update (1)", persianTitle, "account 33333333", i18n.T("cli.sync.also.unarchive")},
+		{"Update (1)", persianTitle, "account 33333333", i18n.T("cli.sync.also.unarchive", "list", "account 33333333")},
 	} {
 		at := strings.Index(r.err, want.heading)
 		if at < 0 {
@@ -584,5 +584,43 @@ func TestUnattendedWriteRefusesWhileDesktopRuns(t *testing.T) {
 	f.ok("switch", "personal", "--force-quit")
 	if d.forced != 1 {
 		t.Error("--force-quit closes Desktop")
+	}
+}
+
+// An update line says which lists also get the archived change: work's older archived copy is
+// updated as it is, personal's newer unarchived one is updated and archived too.
+func TestSyncPreviewSaysWhichListsAlsoArchive(t *testing.T) {
+	f := chatFixture(t)
+	const third = "33333333-3333-4333-8333-333333333333"
+	archived := f.card(work, "c1", s1, "Design review", time.Now().Add(-3*time.Hour))
+	f.put(archived, strings.TrimSuffix(f.read(archived), "}")+`,"isArchived":true}`)
+	f.card(pers, "c1", s1, "Design review", time.Now().Add(-2*time.Hour))
+	f.card(third, "c1", s1, "Design review", time.Now().Add(-time.Hour))
+	r := f.run("sync", "--to", "work")
+	heading := i18n.T("cli.sync.group.update", "n", 1, "to", "work")
+	at := strings.Index(r.err, heading)
+	if at < 0 {
+		t.Fatalf("preview lacks group %q:\n%s", heading, r.err)
+	}
+	line := strings.SplitN(r.err[at:], "\n", 3)[1]
+	if want := "work, " + i18n.T("cli.sync.also.archive", "list", "personal"); !strings.Contains(line, want) {
+		t.Errorf("update line = %q, want %q", line, want)
+	}
+}
+
+// A plan with only conflicts left never says every list is up to date; it warns about them.
+func TestSyncOnlyConflicts(t *testing.T) {
+	f := chatFixture(t)
+	for _, id := range []string{"c1", "c2"} {
+		card := filepath.Join(f.listDir(work), "local_"+id+".json")
+		f.put(filepath.Join(f.listDir(pers), "local_"+id+".json"), f.read(card))
+	}
+	f.put(filepath.Join(f.listDir(work), "deleted_"+s3), strconv.FormatInt(time.Now().Add(-48*time.Hour).UnixMilli(), 10))
+	r := f.ok("sync", "--to", "work", "--yes")
+	if strings.Contains(r.out+r.err, i18n.T("cli.plan.sync.nothing")) {
+		t.Errorf("a conflicts-only sync says nothing is left to do:\n%s%s", r.err, r.out)
+	}
+	if !strings.Contains(r.out, i18n.T("cli.sync.conflicts", "n", 1)) {
+		t.Errorf("a conflicts-only sync warns about the conflict:\n%s", r.out)
 	}
 }

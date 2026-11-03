@@ -215,8 +215,8 @@ func (p *syncPreview) view(c *Ctx, width, height int) string {
 }
 
 // line is a heading, or a chat: the cursor bar, its mark, the title, then the project, the
-// accounts the action changes (for a pull, the one it comes from) and, for a conflict, the
-// choice or, for an update, an archived change it also makes.
+// accounts the action changes (for a pull, the one it comes from), each marked with an archived
+// change an update also makes there, and, for a conflict, the choice.
 func (p *syncPreview) line(c *Ctx, li, width int) string {
 	l, st := c.L(), c.St
 	pl := p.lines[li]
@@ -241,17 +241,19 @@ func (p *syncPreview) line(c *Ctx, li, width int) string {
 		default:
 			mark, trail = st.Warn.Render("?"), []string{st.Warn.Render(l.Text(i18n.T("ui.sync.conflict.open")))}
 		}
-	case g.Steps[0].Also != "":
-		trail = []string{muted.Render(l.Text(i18n.T("ui.sync.also." + string(g.Steps[0].Also))))}
 	}
 	if p.out[g.Chat.ID] {
 		mark, text, muted, trail = st.Dim.Render("☐"), st.Dim, st.Dim, nil
 	}
 	where := make([]string, len(g.Steps))
 	for i, s := range g.Steps {
-		where[i] = s.List.Label
-		if g.Action == ops.Pull || g.Action == ops.Conflict {
+		switch {
+		case g.Action == ops.Pull || g.Action == ops.Conflict:
 			where[i] = s.Chat.List.Label
+		case s.Also != "":
+			where[i] = i18n.T("ui.sync.also."+string(s.Also), "list", s.List.Label)
+		default:
+			where[i] = s.List.Label
 		}
 	}
 	cols := []string{muted.Render(l.Data(g.Chat.Project, max(8, width/6))), muted.Render(l.Data(strings.Join(where, ", "), max(8, width/4)))}

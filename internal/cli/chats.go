@@ -229,7 +229,11 @@ func (a *app) pointer() string { return a.st.accent.Render("›") }
 func (a *app) apply(ctx context.Context, env *ops.Env, p ops.Plan) error {
 	a.say(a.err, a.pointer(), a.st.plain, i18n.T("cli.plan."+p.Kind, "n", p.Cards(), "from", p.From.Label, "to", p.To.Label))
 	if p.Kind == ops.Sync {
-		a.note(a.err, i18n.T("cli.plan.sync.counts", "pull", p.Chats(ops.Pull), "create", p.Chats(ops.Create), "update", p.Chats(ops.Update), "archive", p.Chats(ops.Archive), "unarchive", p.Chats(ops.Unarchive), "delete", p.Chats(ops.Delete), "unmark", p.Chats(ops.Unmark), "conflict", p.Chats(ops.Conflict), "to", p.To.Label))
+		args := []any{"to", p.To.Label}
+		for _, act := range ops.SyncOrder {
+			args = append(args, string(act), p.Chats(act))
+		}
+		a.note(a.err, i18n.T("cli.plan.sync.counts", args...))
 		a.preview(p)
 	} else {
 		a.note(a.err, i18n.T("cli.plan.counts", "create", p.Count(ops.Create), "update", p.Count(ops.Update), "skip", p.Count(ops.SkipNewer)))
@@ -240,6 +244,10 @@ func (a *app) apply(ctx context.Context, env *ops.Env, p ops.Plan) error {
 		writes -= p.Count(ops.SkipNewer)
 	}
 	if writes == 0 {
+		if p.Chats(ops.Conflict) > 0 && !a.flags.json {
+			a.leftAlone(p) // only conflicts remain: the warning says it all
+			return nil
+		}
 		if err := a.changed(p.Kind, p.From.Label, p.To.Label, ops.Result{Summary: nothing(p), Skipped: len(p.Steps)}, false, syncSteps(p)...); err != nil {
 			return err
 		}
@@ -273,8 +281,8 @@ func (a *app) leftAlone(p ops.Plan) {
 	}
 }
 
-// preview lists a sync's chats grouped by action: each line names the chat, its project, the
-// lists the action changes and, for an update, an archived change it also makes.
+// preview lists a sync's chats grouped by action: each line names the chat, its project and the
+// lists the action changes, each marked with an archived change an update also makes there.
 func (a *app) preview(p ops.Plan) {
 	width := max(a.width-a.labelWidth()*3-10, 12)
 	groups := p.ByChat()
@@ -293,19 +301,21 @@ func (a *app) preview(p ops.Plan) {
 		lists := make([]string, len(g.Steps))
 		for j, s := range g.Steps {
 			lists[j] = s.List.Label
+			if s.Also != "" {
+				lists[j] = i18n.T("cli.sync.also."+string(s.Also), "list", s.List.Label)
+			}
 		}
 		sep := a.st.muted.Render("·")
-		parts := []string{"   ", title, sep, a.st.muted.Render(a.fit(g.Chat.Project, a.labelWidth())),
-			sep, a.st.muted.Render(a.fit(strings.Join(lists, ", "), a.labelWidth()*2))}
-		if also := g.Steps[0].Also; also != "" {
-			parts = append(parts, sep, a.st.muted.Render(a.txt(i18n.T("cli.sync.also."+string(also)))))
-		}
-		a.print(a.err, a.line(parts...))
+		a.print(a.err, a.line("   ", title, sep, a.st.muted.Render(a.fit(g.Chat.Project, a.labelWidth())),
+			sep, a.st.muted.Render(a.fit(strings.Join(lists, ", "), a.labelWidth()*2))))
 	}
 }
 
-// nothing is the summary of a plan that writes nothing.
+// nothing is the summary of a plan that writes nothing: the conflicts it leaves alone, if any.
 func nothing(p ops.Plan) string {
+	if n := p.Chats(ops.Conflict); n > 0 {
+		return i18n.T("cli.sync.conflicts", "n", n)
+	}
 	if p.Kind == ops.Sync {
 		return i18n.T("cli.plan.sync.nothing")
 	}
