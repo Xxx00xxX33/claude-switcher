@@ -1,11 +1,11 @@
 #!/bin/sh
 # Claude Switcher by Nyxon - installer for macOS and Linux
-#   curl -fsSL https://raw.githubusercontent.com/nyxon-tech/claude-switcher/main/install.sh | sh
+#   curl -fsSL https://raw.githubusercontent.com/Xxx00xxX33/claude-switcher/main/install.sh | sh
 # Installs to ~/.local/bin (or $CLAUDE_SWITCHER_BIN) for the current user only. The download is
 # checked against the release's checksums.txt before anything is installed.
 set -eu
 
-repo=nyxon-tech/claude-switcher
+repo=Xxx00xxX33/claude-switcher
 version=${CLAUDE_SWITCHER_VERSION:-latest}
 bin=${CLAUDE_SWITCHER_BIN:-$HOME/.local/bin}
 

@@ -10,8 +10,8 @@
 </p>
 
 <p align="center">
-  <a href="https://github.com/nyxon-tech/claude-switcher/releases/latest"><img src="https://img.shields.io/github/v/release/nyxon-tech/claude-switcher?style=flat-square&color=a8b2ff&labelColor=303345&label=release" alt="Latest release"></a>
-  <a href="https://github.com/nyxon-tech/claude-switcher/actions/workflows/ci.yml"><img src="https://img.shields.io/github/actions/workflow/status/nyxon-tech/claude-switcher/ci.yml?branch=main&style=flat-square&color=a8b2ff&labelColor=303345&label=tests" alt="Tests"></a>
+  <a href="https://github.com/Xxx00xxX33/claude-switcher/releases/latest"><img src="https://img.shields.io/github/v/release/Xxx00xxX33/claude-switcher?style=flat-square&color=a8b2ff&labelColor=303345&label=release" alt="Latest release"></a>
+  <a href="https://github.com/Xxx00xxX33/claude-switcher/actions/workflows/ci.yml"><img src="https://img.shields.io/github/actions/workflow/status/Xxx00xxX33/claude-switcher/ci.yml?branch=main&style=flat-square&color=a8b2ff&labelColor=303345&label=tests" alt="Tests"></a>
   <img src="https://img.shields.io/badge/Windows%20%C2%B7%20macOS%20%C2%B7%20Linux-a8b2ff?style=flat-square&labelColor=303345" alt="Windows, macOS and Linux">
   <a href="./LICENSE"><img src="https://img.shields.io/badge/license-MIT-a8b2ff?style=flat-square&labelColor=303345" alt="MIT license"></a>
 </p>
@@ -25,16 +25,16 @@ Claude Desktop is signed into one account at a time. Switching means logging out
 **Windows** (PowerShell)
 
 ```powershell
-irm https://raw.githubusercontent.com/nyxon-tech/claude-switcher/main/install.ps1 | iex
+irm https://raw.githubusercontent.com/Xxx00xxX33/claude-switcher/main/install.ps1 | iex
 ```
 
 **macOS and Linux**
 
 ```sh
-curl -fsSL https://raw.githubusercontent.com/nyxon-tech/claude-switcher/main/install.sh | sh
+curl -fsSL https://raw.githubusercontent.com/Xxx00xxX33/claude-switcher/main/install.sh | sh
 ```
 
-Both scripts download the latest release, check it against the published SHA-256 checksums, and install it for your user only, with no admin rights. Then run `claude-switcher`. You can also download an archive from [Releases](https://github.com/nyxon-tech/claude-switcher/releases/latest), or build it with `go install github.com/nyxon-tech/claude-switcher/v3/cmd/claude-switcher@latest`.
+Both scripts download the latest release, check it against the published SHA-256 checksums, and install it for your user only, with no admin rights. Then run `claude-switcher`. You can also download an archive from [Releases](https://github.com/Xxx00xxX33/claude-switcher/releases/latest).
 
 Already on v2? Run the same line. Your saved logins in `~/.claude-instances` carry over unchanged.
 
@@ -134,7 +134,7 @@ Global flags: `--json`, `--yes`, `--no-launch` (leave Desktop closed), `--theme`
 ## Build from source
 
 ```sh
-git clone https://github.com/nyxon-tech/claude-switcher
+git clone https://github.com/Xxx00xxX33/claude-switcher
 cd claude-switcher
 go test ./...
 go run ./cmd/claude-switcher

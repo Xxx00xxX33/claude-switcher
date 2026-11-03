@@ -41,7 +41,7 @@ nfpms:
   - package_name: claude-switcher
     vendor: Nyxon
     maintainer: Nyxon <https://github.com/nyxon-tech>
-    homepage: https://github.com/nyxon-tech/claude-switcher
+    homepage: https://github.com/Xxx00xxX33/claude-switcher
     description: Switch Claude Desktop accounts without signing in again, and manage your Claude Code chats.
     license: MIT
     formats: [deb, rpm]
@@ -56,7 +56,7 @@ nfpms:
 homebrew_casks:
   - name: claude-switcher
     binaries: [claude-switcher]
-    homepage: https://github.com/nyxon-tech/claude-switcher
+    homepage: https://github.com/Xxx00xxX33/claude-switcher
     description: Switch Claude Desktop accounts without signing in again, and manage your Claude Code chats.
     completions:
       bash: completions/claude-switcher.bash
@@ -78,7 +78,7 @@ homebrew_casks:
 
 scoops:
   - name: claude-switcher
-    homepage: https://github.com/nyxon-tech/claude-switcher
+    homepage: https://github.com/Xxx00xxX33/claude-switcher
     description: Switch Claude Desktop accounts without signing in again, and manage your Claude Code chats.
     license: MIT
     skip_upload: '{{ if index .Env "PUBLISHER_TOKEN" }}auto{{ else }}true{{ end }}'
@@ -94,8 +94,8 @@ winget:
     publisher_url: https://github.com/nyxon-tech
     short_description: Switch Claude Desktop accounts without signing in again, and manage your Claude Code chats.
     license: MIT
-    homepage: https://github.com/nyxon-tech/claude-switcher
-    release_notes_url: "https://github.com/nyxon-tech/claude-switcher/releases/tag/{{ .Tag }}"
+    homepage: https://github.com/Xxx00xxX33/claude-switcher
+    release_notes_url: "https://github.com/Xxx00xxX33/claude-switcher/releases/tag/{{ .Tag }}"
     tags: [claude, cli, tui, account-switcher, persian]
     skip_upload: '{{ if index .Env "WINGET_TOKEN" }}auto{{ else }}true{{ end }}'
     repository:
@@ -115,10 +115,10 @@ release:
     - glob: ./install.ps1
   footer: |
     **Install**
-    - Windows: `irm https://raw.githubusercontent.com/nyxon-tech/claude-switcher/main/install.ps1 | iex`
-    - macOS and Linux: `curl -fsSL https://raw.githubusercontent.com/nyxon-tech/claude-switcher/main/install.sh | sh`
+    - Windows: `irm https://raw.githubusercontent.com/Xxx00xxX33/claude-switcher/main/install.ps1 | iex`
+    - macOS and Linux: `curl -fsSL https://raw.githubusercontent.com/Xxx00xxX33/claude-switcher/main/install.sh | sh`
 
-    Verify a download: `gh attestation verify <file> -R nyxon-tech/claude-switcher`
+    Verify a download: `gh attestation verify <file> -R Xxx00xxX33/claude-switcher`
 
 changelog:
   use: github
