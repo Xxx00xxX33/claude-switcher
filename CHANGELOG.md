@@ -1,5 +1,11 @@
 # Changelog
 
+## Unreleased
+
+### Changed
+- **Archiving follows the latest change.** Sync used to set every account's archived state to the account synced from, so a chat archived in another account came back as active the next time you synced from a different one. Each sync now records every account's archived state (in `~/.claude-instances/_archived.json`, journaled so undo puts it back), and the next sync carries a chat archived or unarchived in any account since then to every account. The account synced from still decides when it changed the chat itself, or when nothing changed.
+- **`m` asks once, like merge did.** The full-screen list of chats is gone: a dialog counts the chats each kind of change touches. Chats used after their deletion in the account synced from are left alone, as on the command line.
+
 ## 3.1.0
 
 ### Changed

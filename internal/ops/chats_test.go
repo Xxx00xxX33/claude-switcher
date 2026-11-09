@@ -274,44 +274,6 @@ func TestSyncAppliesOnlyFreshKeptSteps(t *testing.T) {
 	}
 }
 
-// Leaving a chat out of a sync leaves it out everywhere: its pull into A, its pushes, its
-// archived state and its deletion are all dropped, while the other chats still sync.
-func TestExcludedChatIsWrittenNowhere(t *testing.T) {
-	f, now := chatFixture(t)
-	f.card(third, "c8", s1, "Third's own", now-4000, "")
-	f.card(work, "c9", s2, "Trip", now-1000, `,"isArchived":true`)
-	f.card(pers, "c9", s2, "Trip", now-1000, `,"isArchived":false`)
-	f.card(third, "c9", s2, "Trip", now-1000, `,"isArchived":false`)
-	f.card(pers, "c5", s7, "Gone", now-900000, "")
-	f.card(third, "c5", s7, "Gone", now-900000, "")
-	f.put(filepath.Join(f.listDir(work), "deleted_"+s7), fmt.Sprint(now-1000))
-	p, err := f.PlanSync(f.list("work"))
-	must(t, err)
-	before := map[string]string{}
-	for _, account := range []string{work, pers, third} {
-		for _, id := range []string{"c3", "c5", "c9"} {
-			path := filepath.Join(f.listDir(account), "local_"+id+".json")
-			if f.exists(path) {
-				before[path] = f.read(path)
-			}
-		}
-	}
-	_, err = f.Apply(p.Without("local_c3", "local_c5", "local_c9"))
-	must(t, err)
-	for _, account := range []string{work, pers, third} {
-		for _, id := range []string{"c3", "c5", "c9"} {
-			path := filepath.Join(f.listDir(account), "local_"+id+".json")
-			was, had := before[path]
-			if f.exists(path) != had || had && f.read(path) != was {
-				t.Errorf("%s/%s changed although the chat was left out", account, id)
-			}
-		}
-		if !f.exists(filepath.Join(f.listDir(account), "local_c8.json")) {
-			t.Errorf("%s lacks c8, which was kept", account)
-		}
-	}
-}
-
 // Changes recorded as merge by earlier versions still list and undo.
 func TestOldMergeEntryUndoes(t *testing.T) {
 	f, _ := chatFixture(t)

@@ -123,13 +123,6 @@ func (p Plan) ByChat() []ChatSteps {
 	return out
 }
 
-// Without is the plan with every step of the chats named left out (the preview's exclude): a
-// chat left out is written nowhere.
-func (p Plan) Without(ids ...string) Plan {
-	p.Steps = slices.DeleteFunc(slices.Clone(p.Steps), func(s Step) bool { return slices.Contains(ids, s.Chat.ID) })
-	return p
-}
-
 // Result is what a change did.
 type Result struct {
 	Summary  string
@@ -182,6 +175,10 @@ func (e *Env) PlanSync(to List) (Plan, error) {
 	if err != nil {
 		return Plan{}, err
 	}
+	rec, err := e.readArchiveRecord()
+	if err != nil {
+		return Plan{}, err
+	}
 	newest, copies := map[string]Chat{}, map[string][]Chat{}
 	for _, h := range all {
 		for _, c := range h.chats {
@@ -207,18 +204,22 @@ func (e *Env) PlanSync(to List) (Plan, error) {
 		}
 		gone = append(gone, deletions(all, c.ID)...)
 	}
+	archived := map[string]bool{}
+	for id, c := range newest {
+		base := c.Archived
+		if a, ok := all[0].chats[id]; ok {
+			base = a.Archived
+		}
+		archived[id] = latestArchived(all, rec, id, base)
+	}
 	p := Plan{Kind: Sync, To: to}
 	for i, h := range all {
 		for _, c := range slices.SortedFunc(maps.Values(newest), newestFirst) {
-			archived := c.Archived
-			if a, ok := all[0].chats[c.ID]; ok {
-				archived = a.Archived // archived state follows A
-			}
 			missing := Create
 			if i == 0 {
 				missing = Pull
 			}
-			p.Steps = append(p.Steps, writes(c, archived, h, missing)...)
+			p.Steps = append(p.Steps, writes(c, archived[c.ID], h, missing)...)
 		}
 	}
 	p.Steps = append(p.Steps, gone...)
@@ -453,6 +454,9 @@ func (e *Env) Apply(p Plan) (Result, error) {
 		if err = apply(j, s, write, p.Kind == Move, &res); err != nil {
 			break
 		}
+	}
+	if err == nil && p.Kind == Sync {
+		err = e.recordArchived(j, p.To)
 	}
 	res.Summary = summary(p, res)
 	if serr := j.Save(res.Summary); err == nil {

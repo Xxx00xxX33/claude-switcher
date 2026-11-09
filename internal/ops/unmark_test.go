@@ -11,35 +11,6 @@ const (
 	s5 = "10000000-0000-4000-8000-000000000005"
 )
 
-// "Keep and pull into A" writes the chat back into A, so A's own marker for it goes in the same
-// journal entry, shown in the plan; undo brings the marker back.
-func TestKeepAndPullRemovesAsMarker(t *testing.T) {
-	f, _ := conflictFixture(t)
-	sessions := filepath.Join(f.data, "claude-code-sessions")
-	marker := filepath.Join(f.listDir(work), "deleted_"+s3)
-	before := f.hash(sessions)
-	p, err := f.PlanSync(f.list("work"))
-	must(t, err)
-	p, err = f.Resolve(p, map[string]Choice{"local_c3": KeepAndPull})
-	must(t, err)
-	if p.Chats(Unmark) != 1 || p.Count(Unmark) != 1 {
-		t.Fatalf("the plan should remove A's marker for c3: %+v", p.Steps)
-	}
-	_, err = f.Apply(p)
-	must(t, err)
-	if f.exists(marker) {
-		t.Fatal("A still holds its marker for the chat pulled back in")
-	}
-	if !f.exists(filepath.Join(f.listDir(work), "local_c3.json")) {
-		t.Fatal("A should hold the pulled chat")
-	}
-	_, err = f.Undo()
-	must(t, err)
-	if f.hash(sessions) != before {
-		t.Fatal("undo should restore the marker and every card byte for byte")
-	}
-}
-
 // A list a chat is written into loses its own markers for the chat's current and prior
 // transcripts; markers for chats not written, and other lists' markers, stay.
 func TestWritingAChatRemovesOnlyItsMarkers(t *testing.T) {

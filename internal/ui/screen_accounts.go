@@ -20,9 +20,6 @@ type accountsScreen struct {
 	follow string // a profile just saved, added or renamed: focus moves to it once it shows
 	top    int    // first card row shown when they do not all fit
 	geo    grid   // where the last View drew the cards, for clicks
-
-	preview *syncPreview // the sync plan waiting for a go, in place of the cards
-	pageH   int          // preview lines the last View showed, for pgup and pgdown
 }
 
 // grid is where the cards landed in the body.
@@ -66,9 +63,6 @@ func (s *accountsScreen) Keys(c *Ctx) []key.Binding {
 	if !c.Loaded {
 		return nil
 	}
-	if s.preview != nil {
-		return s.preview.keys()
-	}
 	if len(s.profiles(c)) == 0 {
 		return []key.Binding{bind("s", "ui.key.save")}
 	}
@@ -84,16 +78,6 @@ func (s *accountsScreen) Keys(c *Ctx) []key.Binding {
 }
 
 func (s *accountsScreen) Update(c *Ctx, msg tea.Msg) tea.Cmd {
-	switch msg.(type) {
-	case tea.KeyPressMsg, tea.MouseClickMsg, tea.MouseWheelMsg:
-		if s.preview != nil { // the preview takes every key, click and wheel turn
-			cmd, done := s.preview.update(c, msg, s.pageH)
-			if done {
-				s.preview = nil
-			}
-			return cmd
-		}
-	}
 	switch msg := msg.(type) {
 	case statusMsg:
 		ps := s.profiles(c)
@@ -105,7 +89,7 @@ func (s *accountsScreen) Update(c *Ctx, msg tea.Msg) tea.Cmd {
 			s.focus, s.follow = i, ""
 		}
 	case syncPlanMsg:
-		if c.runner != nil || c.dialog != nil || s.preview != nil { // the user moved on while the plan was worked out
+		if c.runner != nil || c.dialog != nil { // the user moved on while the plan was worked out
 			return nil
 		}
 		if msg.err != nil {
@@ -313,17 +297,47 @@ func planSync(c *Ctx, name string, to ops.List) tea.Cmd {
 	env := c.Env
 	return func() tea.Msg {
 		plan, err := env.PlanSync(to)
+		if err == nil && plan.Cards() == 0 {
+			err = env.RecordSync(to) // nothing to write, but the archive record must exist
+		}
 		return syncPlanMsg{name, plan, err}
 	}
 }
 
-// confirmSync opens the preview of a plan, or says there is nothing to sync.
+// confirmSync asks before a sync, with how many chats each kind of change touches, or says there
+// is nothing to sync. Chats used after the deletion in the list synced from are left alone.
 func (s *accountsScreen) confirmSync(c *Ctx, name string, plan ops.Plan) tea.Cmd {
+	title := i18n.T("ui.sync.title", "name", name)
+	conflicts := plan.Chats(ops.Conflict)
+	plan.Steps = slices.DeleteFunc(slices.Clone(plan.Steps), func(st ops.Step) bool { return st.Action == ops.Conflict })
 	if len(plan.Steps) == 0 {
-		c.Alert(i18n.T("ui.sync.title", "name", name), i18n.T("ui.sync.nothing"))
+		body := i18n.T("ui.sync.nothing")
+		if conflicts > 0 {
+			body += "\n" + i18n.T("ui.sync.conflicts", "n", conflicts, "name", name)
+		}
+		c.Alert(title, body)
 		return nil
 	}
-	s.preview = newSyncPreview(name, plan)
+	args := []any{"name", name}
+	for _, a := range ops.SyncOrder {
+		args = append(args, string(a), plan.Chats(a))
+	}
+	body := i18n.T("ui.sync.counts", args...)
+	if conflicts > 0 {
+		body += "\n" + i18n.T("ui.sync.conflicts", "n", conflicts, "name", name)
+	}
+	body += "\n" + i18n.T("ui.sync.body", "name", name)
+	env := c.Env
+	c.Confirm(title, body, i18n.T("action.sync"), false, func() tea.Cmd {
+		return c.Change(change{
+			title: i18n.T("ui.sync.running", "name", name),
+			steps: []string{i18n.T("ui.step.synced", "name", name)},
+			run: func() (string, error) {
+				r, err := env.Apply(plan)
+				return r.Summary, err
+			},
+		})
+	})
 	return nil
 }
 
@@ -353,10 +367,6 @@ func (s *accountsScreen) View(c *Ctx, width, height int) string {
 		return middle(l, st.Muted.Render(l.Fit(i18n.T("state.loading"), width)), width, height)
 	case c.Err != nil && len(c.Status.Profiles) == 0:
 		return middle(l, st.Fail.Render(l.Fit(c.Err.Error(), width)), width, height)
-	}
-	if s.preview != nil {
-		s.pageH = max(1, height-4)
-		return s.preview.view(c, width, height)
 	}
 	ps := s.profiles(c)
 	if len(ps) == 0 {

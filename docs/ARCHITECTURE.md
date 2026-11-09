@@ -47,14 +47,16 @@ Never touched: `Local State` (holds the cookie encryption key), `claude_desktop_
 2. **Cards are rewritten losslessly.** A card is a `map[string]json.RawMessage`; fields we do not
    own are kept byte for byte. Files are written compact, UTF-8 without a BOM, via a temp file and
    rename.
-3. **Newest wins.** When two accounts hold the same chat, the card with the larger
-   `lastActivityAt` is the current one. Copy, move and sync never replace a newer card with an
-   older one; a sync also writes a card just as new when only its archived state differs from
-   the list synced from. When the list synced from has a `deleted_` marker for one of a chat's
-   transcripts and no card of it used after the marker, sync deletes the chat's cards from every
-   list, that one included (a card older than its own marker is a leftover), backing each up in
-   the journal first; a copy used after the marker is a conflict and left alone. Sync also removes
-   a list's own `deleted_` markers for the chats it writes there, journaled the same way.
+3. **Newest wins.** When two accounts hold the same chat, the card with the larger `lastActivityAt`
+   is the current one. Copy, move and sync never replace a newer card with an older one; a sync
+   also writes a card just as new when only its archived state differs. A chat's archived state is
+   the one a list changed it to since the last sync (the vault's `_archived.json` records each
+   list's state after every sync, journaled); with no such change, or when the list synced from
+   changed it, that list's state. When the list synced from has a `deleted_` marker for one of a
+   chat's transcripts and no card of it used after the marker, sync deletes the chat's cards from
+   every list, that one included (a card older than its own marker is a leftover), backing each up
+   in the journal first; a copy used after the marker is a conflict and left alone. Sync also
+   removes a list's own `deleted_` markers for the chats it writes there, journaled the same way.
 4. **A chat is several transcripts.** A card's `cliSessionId` is the current part and
    `priorCliSessionIds` lists older parts. Rescue never offers an older part, a tombstoned chat, or
    a chat another card already titles in the same project.
