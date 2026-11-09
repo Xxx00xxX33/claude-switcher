@@ -1,6 +1,6 @@
 # Changelog
 
-## Unreleased
+## 3.2.0
 
 ### Changed
 - **Archiving follows the latest change.** Sync used to set every account's archived state to the account synced from, so a chat archived in another account came back as active the next time you synced from a different one. Each sync now records every account's archived state (in `~/.claude-instances/_archived.json`, journaled so undo puts it back), and the next sync carries a chat archived or unarchived in any account since then to every account. The account synced from still decides when it changed the chat itself, or when nothing changed.
