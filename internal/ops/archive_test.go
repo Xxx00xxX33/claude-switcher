@@ -109,3 +109,66 @@ func TestStaleArchiveStepKeepsNewerCard(t *testing.T) {
 		t.Errorf("a stale archive step wrote over a newer card: %s", got)
 	}
 }
+
+// syncOnce plans a sync with list ref and applies it.
+func syncOnce(t *testing.T, f *fixture, ref string) Plan {
+	t.Helper()
+	p, err := f.PlanSync(f.list(ref))
+	must(t, err)
+	_, err = f.Apply(p)
+	must(t, err)
+	return p
+}
+
+// archived reports whether account's card of chat id is archived.
+func archived(f *fixture, account, id string) bool {
+	return strings.Contains(f.read(filepath.Join(f.listDir(account), "local_"+id+".json")), `"isArchived":true`)
+}
+
+// A chat archived in another account after the last sync is archived everywhere by the next sync,
+// whichever account it syncs with, and the sync after that leaves it archived.
+func TestSyncTakesTheLatestArchiveChange(t *testing.T) {
+	f, now := chatFixture(t)
+	for _, account := range []string{work, pers, third} {
+		f.card(account, "c9", s3, "Trip", now-1000, `,"isArchived":false`)
+	}
+	syncOnce(t, f, "work")
+	f.card(pers, "c9", s3, "Trip", now-1000, `,"isArchived":true`)
+	p := syncOnce(t, f, "work")
+	if p.Chats(Archive) != 1 {
+		t.Fatalf("plan should archive c9: %+v", p.Steps)
+	}
+	for _, account := range []string{work, pers, third} {
+		if !archived(f, account, "c9") {
+			t.Errorf("%s should hold c9 archived", account)
+		}
+	}
+	f.card(third, "c9", s3, "Trip", now-1000, `,"isArchived":false`)
+	syncOnce(t, f, "personal")
+	for _, account := range []string{work, pers, third} {
+		if archived(f, account, "c9") {
+			t.Errorf("%s should hold c9 unarchived, as third last left it", account)
+		}
+	}
+}
+
+// Undoing a sync puts back what it recorded, so the change it carried out is seen again.
+func TestUndoRestoresTheArchiveRecord(t *testing.T) {
+	f, now := chatFixture(t)
+	for _, account := range []string{work, pers, third} {
+		f.card(account, "c9", s3, "Trip", now-1000, `,"isArchived":false`)
+	}
+	syncOnce(t, f, "work")
+	f.card(pers, "c9", s3, "Trip", now-1000, `,"isArchived":true`)
+	syncOnce(t, f, "work")
+	_, err := f.Undo()
+	must(t, err)
+	if archived(f, work, "c9") || !archived(f, pers, "c9") {
+		t.Fatal("undo should put back c9 archived only in personal")
+	}
+	p, err := f.PlanSync(f.list("work"))
+	must(t, err)
+	if p.Chats(Archive) != 1 {
+		t.Fatalf("after undo the archive in personal should be seen again: %+v", p.Steps)
+	}
+}

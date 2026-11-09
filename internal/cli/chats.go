@@ -244,6 +244,11 @@ func (a *app) apply(ctx context.Context, env *ops.Env, p ops.Plan) error {
 		writes -= p.Count(ops.SkipNewer)
 	}
 	if writes == 0 {
+		if p.Kind == ops.Sync { // nothing to write, but the archive record must exist
+			if err := env.RecordSync(p.To); err != nil {
+				return err
+			}
+		}
 		if p.Chats(ops.Conflict) > 0 && !a.flags.json {
 			a.leftAlone(p) // only conflicts remain: the warning says it all
 			return nil
