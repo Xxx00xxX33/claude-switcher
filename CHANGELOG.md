@@ -1,5 +1,10 @@
 # Changelog
 
+## 3.2.1
+
+### Fixed
+- The first sync after updating to 3.2.0 unarchived chats archived in other accounts when the account synced from had them active, because there was no record yet to tell which side changed. With no record of a chat, a sync now keeps it archived if any account has it archived.
+
 ## 3.2.0
 
 ### Changed
