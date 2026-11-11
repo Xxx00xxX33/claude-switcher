@@ -25,12 +25,14 @@ func TestSyncArchivesWhatAArchived(t *testing.T) {
 	}
 }
 
-// Unarchiving a chat in A unarchives it in every list.
+// Unarchiving a chat in A since the last sync unarchives it in every list.
 func TestSyncUnarchivesWhatAUnarchived(t *testing.T) {
 	f, now := chatFixture(t)
+	for _, account := range []string{work, pers, third} {
+		f.card(account, "c9", s3, "Trip", now-1000, `,"isArchived":true`)
+	}
+	syncOnce(t, f, "work")
 	f.card(work, "c9", s3, "Trip", now-1000, `,"isArchived":false`)
-	f.card(pers, "c9", s3, "Trip", now-1000, `,"isArchived":true`)
-	f.card(third, "c9", s3, "Trip", now-1000, `,"isArchived":true`)
 	p, err := f.PlanSync(f.list("work"))
 	must(t, err)
 	if n, chats := p.Count(Unarchive), p.Chats(Unarchive); n != 2 || chats != 1 {
@@ -170,5 +172,20 @@ func TestUndoRestoresTheArchiveRecord(t *testing.T) {
 	must(t, err)
 	if p.Chats(Archive) != 1 {
 		t.Fatalf("after undo the archive in personal should be seen again: %+v", p.Steps)
+	}
+}
+
+// With no record yet (the first sync), a chat archived in any account stays archived everywhere,
+// even when the account synced from has it active.
+func TestFirstSyncKeepsArchivedChats(t *testing.T) {
+	f, now := chatFixture(t)
+	f.card(work, "c9", s3, "Trip", now-1000, `,"isArchived":false`)
+	f.card(pers, "c9", s3, "Trip", now-1000, `,"isArchived":true`)
+	f.card(third, "c9", s3, "Trip", now-1000, `,"isArchived":false`)
+	syncOnce(t, f, "work")
+	for _, account := range []string{work, pers, third} {
+		if !archived(f, account, "c9") {
+			t.Errorf("%s should hold c9 archived", account)
+		}
 	}
 }

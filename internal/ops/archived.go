@@ -44,10 +44,23 @@ func (r archiveRecord) changedSince(h holding, c Chat) bool {
 	return ok && was != c.Archived
 }
 
+// has reports whether the record holds chat id for any list.
+func (r archiveRecord) has(all []holding, id string) bool {
+	return slices.ContainsFunc(all, func(h holding) bool {
+		_, ok := r[listKey(h.list)][id]
+		return ok
+	})
+}
+
 // latestArchived is the archived state chat id ends up with. base is A's state (the newest copy's
 // when A lacks the chat). When lists other than A changed it since the last sync and agree, their
-// state wins; a change made in A, or changes that disagree, leave base.
+// state wins; a change made in A, or changes that disagree, leave base. With no record of the chat
+// in any list (the first sync), there are no changes to go by, so a chat archived anywhere stays
+// archived: an archive is never undone by a list that simply has not caught up.
 func latestArchived(all []holding, rec archiveRecord, id string, base bool) bool {
+	if !rec.has(all, id) {
+		return base || slices.ContainsFunc(all, func(h holding) bool { return h.chats[id].Archived })
+	}
 	if a, ok := all[0].chats[id]; ok && rec.changedSince(all[0], a) {
 		return base
 	}

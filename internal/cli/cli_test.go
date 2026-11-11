@@ -269,6 +269,9 @@ func TestSyncCountsChats(t *testing.T) {
 	archived(pers, "c1", s1, "Design review", hour)
 	archived(third, "c1", s1, "Design review", hour)
 	archived(third, "c3", s3, "Holiday, older", hour)
+	// A record of the chats as they are: nothing changed since the last sync, so work's state wins.
+	f.put(filepath.Join(f.vault, "_archived.json"), `{"`+work+"/"+org+`":{"local_c1":false},"`+pers+"/"+org+`":{"local_c1":true},"`+
+		third+"/"+org+`":{"local_c1":true,"local_c3":true}}`)
 	r := f.run("sync", "--to", "work")
 	if !strings.Contains(r.err, i18n.T("cli.plan.sync.counts", "pull", 1, "create", 1, "update", 1, "archive", 0, "unarchive", 1, "delete", 0, "unmark", 0, "conflict", 0, "to", "work")) {
 		t.Errorf("sync counts chats:\n%s", r.err)
